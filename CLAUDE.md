@@ -154,3 +154,24 @@ python watch_tests.py --once    # single run, non-zero exit on failure (CI)
 opencv-python>=4.9.0  numpy>=1.26.0  PyQt6>=6.6.0
 PyYAML>=6.0  pandas>=2.2.0  scipy>=1.13.0  pytest>=8.0.0  watchdog>=4.0.0
 ```
+
+---
+
+## GUI Layout
+
+UI design mockup: `UGILayout/UGIlayout.pdf`
+
+### Job Configuration
+- Load and display the reference image
+- Draw / edit the ROI (region of interest) on the reference image
+- Set the scale (mm/px calibration)
+- Select the alignment algorithm (ECC / POC fallback)
+- Save / load a named configuration profile
+
+### Testing Mode
+- Load an inspection image
+- Run alignment against the reference using the active profile
+- Display result: dx, dy, angle (°), confidence
+- Visual overlay on the inspection image:
+  - Highlight detected edges / object contour (e.g. Canny edges drawn in a contrasting colour)
+  - Show displacement vector or bounding-box offset relative to the reference position

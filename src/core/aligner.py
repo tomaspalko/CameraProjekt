@@ -10,6 +10,8 @@ def align(
     image: np.ndarray,
     max_iter: int = 5000,
     epsilon: float = 1e-8,
+    mask: np.ndarray | None = None,
+    algorithm: str = "ECC",
 ) -> dict:
     """Align *image* to *reference* using ECC (Enhanced Correlation Coefficient).
 
@@ -21,6 +23,8 @@ def align(
         image:     Grayscale uint8 image to align.
         max_iter:  Maximum ECC iterations.
         epsilon:   Convergence threshold.
+        mask:      Optional uint8 mask (255 = use pixel, 0 = ignore).
+        algorithm: "ECC" (default) or "POC" (not yet implemented).
 
     Returns:
         dict with keys:
@@ -29,6 +33,11 @@ def align(
             angle_deg – rotation in degrees
             confidence – ECC correlation value in [0, 1]
     """
+    if algorithm == "POC":
+        raise NotImplementedError("POC algorithm is not yet implemented (Phase 5).")
+    if algorithm != "ECC":
+        raise ValueError(f"Unknown algorithm '{algorithm}'. Expected 'ECC' or 'POC'.")
+
     warp = np.eye(2, 3, dtype=np.float32)
     criteria = (
         cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS,
@@ -40,11 +49,12 @@ def align(
         ref_f32 = reference.astype(np.float32)
         img_f32 = image.astype(np.float32)
 
+        input_mask = mask if mask is not None else None
         ecc_value, warp = cv2.findTransformECC(
             ref_f32, img_f32, warp,
             cv2.MOTION_EUCLIDEAN,
             criteria,
-            None,   # inputMask
+            input_mask,
             3,      # gaussFiltSize: Gaussian blur for gradient computation (3 = mild smoothing)
         )
 
