@@ -167,12 +167,12 @@ def test_legacy_save_load_still_works(cm):
 
 # ── Aligner algorithm parameter ───────────────────────────────────────────────
 
-def test_align_poc_raises_not_implemented():
+def test_align_poc_returns_result():
     import numpy as np
     from src.core.aligner import align
     ref = np.zeros((64, 64), dtype=np.uint8)
-    with pytest.raises(NotImplementedError):
-        align(ref, ref, algorithm="POC")
+    result = align(ref, ref, algorithm="POC")
+    assert "dx_px" in result
 
 def test_align_unknown_algorithm_raises():
     import numpy as np

@@ -34,7 +34,8 @@ def align(
             confidence – ECC correlation value in [0, 1]
     """
     if algorithm == "POC":
-        raise NotImplementedError("POC algorithm is not yet implemented (Phase 5).")
+        from src.core.poc_correlator import poc_align
+        return poc_align(reference, image, mask=mask)
     if algorithm != "ECC":
         raise ValueError(f"Unknown algorithm '{algorithm}'. Expected 'ECC' or 'POC'.")
 

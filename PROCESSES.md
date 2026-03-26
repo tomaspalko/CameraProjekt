@@ -13,9 +13,9 @@
 | 2 | Konfigurácia | ✅ Hotová | phase-2 |
 | 3 | Batch | ✅ Hotová | phase-2 |
 | 4 | GUI | ✅ Hotová | phase-2 |
-| 5 | Testy & kalibrácia (POC) | ⏳ Ďalšia | — |
+| 5 | Testy & kalibrácia (POC) | ✅ Hotová | phase-2 |
 
-**Testov:** 108 (92 unit + 16 integration) — všetky zelené.
+**Testov:** 124 (108 unit + 16 integration) — všetky zelené.
 
 ---
 
@@ -66,7 +66,8 @@ C:\Users\tomas.palko\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12
 src/
 ├── core/
 │   ├── preprocessor.py     # CLAHE + blur → uint8 grayscale
-│   ├── aligner.py          # ECC (cv2.findTransformECC), POC stub
+│   ├── aligner.py          # ECC (cv2.findTransformECC), routes to POC
+│   ├── poc_correlator.py   # Phase-Only Correlation + log-polar rotation
 │   ├── roi.py              # ROI dataclass + create_mask()
 │   ├── calibration.py      # Calibration(mm_per_px)
 │   └── result.py           # AlignResult dataclass
@@ -142,12 +143,11 @@ MIN_CONFIDENCE     = 0.60   # minimálna ECC spoľahlivosť
 
 ---
 
-## Fáza 5 — čo zostáva
-
-- **POC algoritmus** (`src/core/poc_correlator.py`) — Phase-Only Correlation, momentálne `NotImplementedError`
-- Cieľ: RMS chyba < 0.05 px, uhol < 0.02°
-- Benchmarky presnosti (ECC tuning)
-- Dokumentácia
+### POC aligner (`src/core/poc_correlator.py`)
+- Dvojkrokový pipeline: log-polar FFT → rotácia, potom POC → transl
+- **Rotácia:** FFT magnitúdy oboch obrazov → log-polar warp (`cv2.warpPolar`) → POC → uhol
+- **Preklad:** derotovaný obraz + POC s Hann oknom → sub-pixel parabolic fit
+- Tolerancie v `tests/unit/test_poc.py`: 0.05 px, 0.05°
 
 ---
 
