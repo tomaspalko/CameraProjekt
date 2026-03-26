@@ -1,5 +1,7 @@
 # CLAUDE.md — Weld Inspection Vision System
 
+@PROCESSES.md
+
 ## Specifications
 
 | Parameter | Value |

@@ -10,6 +10,9 @@ Usage examples:
 
     # Override reference from a profile:
     python main.py --profile job_01 --reference data/reference/new_ref.png --folder data/batch/
+
+    # Grafické rozhranie (GUI):
+    python main.py --gui
 """
 from __future__ import annotations
 
@@ -23,9 +26,11 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Weld Inspection — batch alignment CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    p.add_argument("--gui",           action="store_true",
+                   help="Spustiť grafické rozhranie (ostatné argumenty sa ignorujú)")
     p.add_argument("--reference",     metavar="PATH",
                    help="Path to reference image (required when --profile is not used)")
-    p.add_argument("--folder",        metavar="PATH", required=True,
+    p.add_argument("--folder",        metavar="PATH",
                    help="Directory containing images to process")
     p.add_argument("--profile",       metavar="NAME",
                    help="Name of a saved profile to load")
@@ -148,9 +153,27 @@ def _run_plain(args) -> int:
     return 1 if errors > 0 else 0
 
 
+def _run_gui(args) -> int:
+    from PyQt6.QtWidgets import QApplication
+    from src.gui.main_window import MainWindow
+
+    app = QApplication(sys.argv)
+    win = MainWindow(profiles_dir=args.profiles_dir)
+    win.show()
+    return app.exec()
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.gui:
+        return _run_gui(args)
+
+    if not args.folder:
+        print("ERROR: --folder is required (alebo použi --gui pre grafické rozhranie)",
+              file=sys.stderr)
+        return 2
 
     if not Path(args.folder).is_dir():
         print(f"ERROR: Folder not found: {args.folder}", file=sys.stderr)
