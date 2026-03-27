@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import cv2
+import math
 import numpy as np
 from pathlib import Path
 
@@ -83,6 +84,7 @@ class InspectionPanel(QWidget):
         self._erased_mask: np.ndarray | None = None      # uint8 pixel-level maska; 0 = vymazaný pixel
         self._undo_stack: list[tuple[frozenset[int], np.ndarray | None]] = []
         self._selected_label: int | None = None          # vybraný segment pre template matching
+        self._segment_centroid_ref: tuple[float, float] | None = None  # ťažisko segmentu v ref. obraze
 
         self._build_ui()
         self._connect_signals()
@@ -642,8 +644,15 @@ class InspectionPanel(QWidget):
         self._res_angle   = QLabel("—")
         self._res_conf    = QLabel("—")
         self._res_ncc     = QLabel("—")
+        self._res_centroid_pos = QLabel("—")
+        self._res_dx_c_px      = QLabel("—")
+        self._res_dy_c_px      = QLabel("—")
+        self._res_dx_c_mm      = QLabel("—")
+        self._res_dy_c_mm      = QLabel("—")
         for lbl in (self._res_dx_px, self._res_dy_px, self._res_dx_mm,
-                    self._res_dy_mm, self._res_angle, self._res_conf, self._res_ncc):
+                    self._res_dy_mm, self._res_angle, self._res_conf, self._res_ncc,
+                    self._res_centroid_pos, self._res_dx_c_px, self._res_dy_c_px,
+                    self._res_dx_c_mm, self._res_dy_c_mm):
             lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         form.addRow("dx [px]:", self._res_dx_px)
         form.addRow("dy [px]:", self._res_dy_px)
@@ -652,6 +661,15 @@ class InspectionPanel(QWidget):
         form.addRow("Uhol [°]:", self._res_angle)
         form.addRow("Spoľahlivosť:", self._res_conf)
         form.addRow("NCC:", self._res_ncc)
+        # ── sekcia ťažiska segmentu ──
+        sep = QLabel("── Ťažisko segmentu ──")
+        sep.setStyleSheet("color: #888; font-size: 9px;")
+        form.addRow(sep)
+        form.addRow("Poloha ref [px]:", self._res_centroid_pos)
+        form.addRow("dx_c [px]:", self._res_dx_c_px)
+        form.addRow("dy_c [px]:", self._res_dy_c_px)
+        form.addRow("dx_c [mm]:", self._res_dx_c_mm)
+        form.addRow("dy_c [mm]:", self._res_dy_c_mm)
         return grp
 
     # ------------------------------------------------------------------
@@ -982,6 +1000,33 @@ class InspectionPanel(QWidget):
 
         self._insp_viewer.draw_overlay(result.dx_px, result.dy_px, projected_rgba)
 
+        # ── Ťažisko segmentu: výpočet posunutia a overlay ──
+        if self._segment_centroid_ref is not None:
+            cx_seg, cy_seg = self._segment_centroid_ref
+            h_r, w_r = self._ref_image.shape[:2]
+            cx_img, cy_img = w_r / 2.0, h_r / 2.0
+            θ = math.radians(result.angle_deg)
+            # Nová poloha ťažiska v inšpekčnom obraze (getRotationMatrix2D konvencia)
+            cx_new = (math.cos(θ) * (cx_seg - cx_img) + math.sin(θ) * (cy_seg - cy_img)
+                      + cx_img + result.dx_px)
+            cy_new = (-math.sin(θ) * (cx_seg - cx_img) + math.cos(θ) * (cy_seg - cy_img)
+                      + cy_img + result.dy_px)
+            dx_c = cx_new - cx_seg
+            dy_c = cy_new - cy_seg
+            dx_c_mm = dx_c * profile.scale_mm_per_px
+            dy_c_mm = dy_c * profile.scale_mm_per_px
+            self._res_centroid_pos.setText(f"x={cx_seg:.1f}  y={cy_seg:.1f}")
+            self._res_dx_c_px.setText(f"{dx_c:.4f}")
+            self._res_dy_c_px.setText(f"{dy_c:.4f}")
+            self._res_dx_c_mm.setText(f"{dx_c_mm:.4f}")
+            self._res_dy_c_mm.setText(f"{dy_c_mm:.4f}")
+            # Overlay: prereknovaný bod (kde bolo) → projektovaný bod (kde je) + spájajúca čiara
+            self._insp_viewer.draw_centroid_displacement(cx_seg, cy_seg, cx_new, cy_new)
+        else:
+            for lbl in (self._res_centroid_pos, self._res_dx_c_px, self._res_dy_c_px,
+                        self._res_dx_c_mm, self._res_dy_c_mm):
+                lbl.setText("—")
+
     # ------------------------------------------------------------------
     # Pomocné metódy
     # ------------------------------------------------------------------
@@ -1233,10 +1278,24 @@ class InspectionPanel(QWidget):
         if self._select_seg_btn.isChecked():
             # SELECT MODE: vyber segment pre template matching
             self._selected_label = label
+            # Výpočet ťažiska vybraného segmentu pomocou momentov obrazu
+            seg_mask = (self._segment_labels == label).astype(np.uint8) * 255
+            M_mom = cv2.moments(seg_mask)
+            if M_mom["m00"] > 0:
+                self._segment_centroid_ref = (
+                    M_mom["m10"] / M_mom["m00"],
+                    M_mom["m01"] / M_mom["m00"],
+                )
+            else:
+                self._segment_centroid_ref = None
             self._update_seg_info()
             self._ref_viewer.draw_edges_with_selection(
                 self._active_ref_edges, self._segment_labels, label
             )
+            # Nakresli krížik ťažiska ПОСЛЕ draw_edges_with_selection (ta volá clear_overlay)
+            if self._segment_centroid_ref is not None:
+                cx_c, cy_c = self._segment_centroid_ref
+                self._ref_viewer.draw_centroid_marker(cx_c, cy_c)
         else:
             # REMOVE MODE (pôvodné správanie)
             self._push_undo()
@@ -1401,6 +1460,7 @@ class InspectionPanel(QWidget):
     def _on_clear_selection(self) -> None:
         """Zruší výber segmentu a resetuje overlay."""
         self._selected_label = None
+        self._segment_centroid_ref = None
         self._update_seg_info()
         # Obnov normálne zobrazenie hrán
         active = self._active_ref_edges

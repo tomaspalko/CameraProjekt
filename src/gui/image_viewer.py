@@ -183,6 +183,81 @@ class ImageViewer(QWidget):
             line.setZValue(2)
             self._overlay_items.append(line)
 
+    def draw_centroid_marker(self, cx: float, cy: float,
+                             color: QColor | None = None) -> None:
+        """Nakreslí krížik (+) na pozícii ťažiska segmentu.
+
+        Args:
+            cx, cy: Poloha ťažiska v obrazových súradniciach [px].
+            color:  Farba krížika (default: oranžová).
+        """
+        if self._pixmap_item is None:
+            return
+        c = color if color is not None else QColor(255, 128, 0)
+        pen = QPen(c)
+        pen.setWidth(2)
+        arm = 10  # dĺžka ramena krížika [px]
+        for x0, y0, x1, y1 in [
+            (cx - arm, cy, cx + arm, cy),   # horizontálne rameno
+            (cx, cy - arm, cx, cy + arm),   # vertikálne rameno
+        ]:
+            line = self._scene.addLine(x0, y0, x1, y1, pen)
+            line.setZValue(3)
+            self._overlay_items.append(line)
+
+    def draw_centroid_displacement(
+        self,
+        cx_ref: float, cy_ref: float,
+        cx_new: float, cy_new: float,
+    ) -> None:
+        """Overlay posunutia ťažiska segmentu na inšpekčnom vieweri.
+
+        Kreslí:
+          - Prerušovaný oranžový krížik na referenčnej polohe (kde ťažisko BOLO).
+          - Plný žltý krížik na projektovanej polohe (kde ťažisko JE).
+          - Bielu čiaru spájajúcu oba body (vektor posunutia).
+
+        Args:
+            cx_ref, cy_ref: Referenčná poloha ťažiska [px].
+            cx_new, cy_new: Projektovaná poloha ťažiska v inšpekčnom obraze [px].
+        """
+        if self._pixmap_item is None:
+            return
+        arm = 10
+
+        # Prerušovaný krížik — referenčná poloha (kde BOLO)
+        pen_ref = QPen(QColor(255, 128, 0))
+        pen_ref.setWidth(2)
+        pen_ref.setStyle(Qt.PenStyle.DashLine)
+        for x0, y0, x1, y1 in [
+            (cx_ref - arm, cy_ref, cx_ref + arm, cy_ref),
+            (cx_ref, cy_ref - arm, cx_ref, cy_ref + arm),
+        ]:
+            line = self._scene.addLine(x0, y0, x1, y1, pen_ref)
+            line.setZValue(3)
+            self._overlay_items.append(line)
+
+        # Plný krížik — projektovaná poloha (kde JE)
+        pen_new = QPen(QColor(255, 255, 0))
+        pen_new.setWidth(2)
+        for x0, y0, x1, y1 in [
+            (cx_new - arm, cy_new, cx_new + arm, cy_new),
+            (cx_new, cy_new - arm, cx_new, cy_new + arm),
+        ]:
+            line = self._scene.addLine(x0, y0, x1, y1, pen_new)
+            line.setZValue(3)
+            self._overlay_items.append(line)
+
+        # Spájajúca čiara (vektor posunutia ťažiska)
+        dx = cx_new - cx_ref
+        dy = cy_new - cy_ref
+        if abs(dx) > 0.5 or abs(dy) > 0.5:
+            pen_line = QPen(QColor(255, 255, 255))
+            pen_line.setWidth(2)
+            conn = self._scene.addLine(cx_ref, cy_ref, cx_new, cy_new, pen_line)
+            conn.setZValue(3)
+            self._overlay_items.append(conn)
+
     def draw_edges(self, edges: np.ndarray) -> None:
         """Overlay Canny edge mask (cyan) — without displacement arrow."""
         self.clear_overlay()
