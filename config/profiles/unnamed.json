@@ -1,0 +1,39 @@
+{
+  "name": "unnamed",
+  "reference_path": "C:/Users/tomas.palko/Desktop/TestPictures/Image (2).jpg",
+  "roi": {
+    "x0": 402,
+    "y0": 279,
+    "x1": 605,
+    "y1": 447
+  },
+  "scale_mm_per_px": 1.0,
+  "algorithm": "ECC",
+  "ecc": {
+    "max_iter": 2000,
+    "epsilon": 1e-08,
+    "gauss_filt_size": 3
+  },
+  "auto_clahe": true,
+  "edge_method": "Canny",
+  "canny": {
+    "threshold1": 71,
+    "threshold2": 150,
+    "blur": 9
+  },
+  "scharr": {
+    "threshold": 30,
+    "blur": 3
+  },
+  "log": {
+    "sigma": 1.5,
+    "threshold": 10,
+    "blur": 1
+  },
+  "pc": {
+    "nscale": 4,
+    "min_wavelength": 6,
+    "mult": 2.1,
+    "k": 2.0
+  }
+}
