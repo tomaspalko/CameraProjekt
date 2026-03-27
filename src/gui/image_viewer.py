@@ -185,25 +185,32 @@ class ImageViewer(QWidget):
 
     def draw_centroid_marker(self, cx: float, cy: float,
                              color: QColor | None = None) -> None:
-        """Nakreslí krížik (+) na pozícii ťažiska segmentu.
+        """Nakreslí krížik (+) a krúžok na pozícii ťažiska segmentu.
 
         Args:
             cx, cy: Poloha ťažiska v obrazových súradniciach [px].
-            color:  Farba krížika (default: oranžová).
+            color:  Farba krížika (default: biela — viditeľná na oranžovom segmente).
         """
         if self._pixmap_item is None:
             return
-        c = color if color is not None else QColor(255, 128, 0)
+        c = color if color is not None else QColor(255, 255, 255)  # biela
         pen = QPen(c)
-        pen.setWidth(2)
-        arm = 10  # dĺžka ramena krížika [px]
+        pen.setWidth(3)
+        arm = 15  # dĺžka ramena krížika [px]
         for x0, y0, x1, y1 in [
             (cx - arm, cy, cx + arm, cy),   # horizontálne rameno
             (cx, cy - arm, cx, cy + arm),   # vertikálne rameno
         ]:
             line = self._scene.addLine(x0, y0, x1, y1, pen)
-            line.setZValue(3)
+            line.setZValue(4)
             self._overlay_items.append(line)
+        # Malý kruh v strede — presná identifikácia bodu ťažiska
+        r = 5
+        ellipse = self._scene.addEllipse(
+            cx - r, cy - r, 2 * r, 2 * r, pen, QBrush(Qt.BrushStyle.NoBrush)
+        )
+        ellipse.setZValue(4)
+        self._overlay_items.append(ellipse)
 
     def draw_centroid_displacement(
         self,
@@ -223,10 +230,10 @@ class ImageViewer(QWidget):
         """
         if self._pixmap_item is None:
             return
-        arm = 10
+        arm = 15
 
-        # Prerušovaný krížik — referenčná poloha (kde BOLO)
-        pen_ref = QPen(QColor(255, 128, 0))
+        # Prerušovaný biely krížik — referenčná poloha (kde ťažisko BOLO)
+        pen_ref = QPen(QColor(255, 255, 255))
         pen_ref.setWidth(2)
         pen_ref.setStyle(Qt.PenStyle.DashLine)
         for x0, y0, x1, y1 in [
@@ -234,28 +241,34 @@ class ImageViewer(QWidget):
             (cx_ref, cy_ref - arm, cx_ref, cy_ref + arm),
         ]:
             line = self._scene.addLine(x0, y0, x1, y1, pen_ref)
-            line.setZValue(3)
+            line.setZValue(4)
             self._overlay_items.append(line)
 
-        # Plný krížik — projektovaná poloha (kde JE)
+        # Plný žltý krížik + krúžok — projektovaná poloha (kde ťažisko JE)
         pen_new = QPen(QColor(255, 255, 0))
-        pen_new.setWidth(2)
+        pen_new.setWidth(3)
         for x0, y0, x1, y1 in [
             (cx_new - arm, cy_new, cx_new + arm, cy_new),
             (cx_new, cy_new - arm, cx_new, cy_new + arm),
         ]:
             line = self._scene.addLine(x0, y0, x1, y1, pen_new)
-            line.setZValue(3)
+            line.setZValue(4)
             self._overlay_items.append(line)
+        r = 5
+        el = self._scene.addEllipse(
+            cx_new - r, cy_new - r, 2 * r, 2 * r, pen_new, QBrush(Qt.BrushStyle.NoBrush)
+        )
+        el.setZValue(4)
+        self._overlay_items.append(el)
 
-        # Spájajúca čiara (vektor posunutia ťažiska)
+        # Biela čiara spájajúca oba body (vektor posunutia ťažiska)
         dx = cx_new - cx_ref
         dy = cy_new - cy_ref
         if abs(dx) > 0.5 or abs(dy) > 0.5:
             pen_line = QPen(QColor(255, 255, 255))
             pen_line.setWidth(2)
             conn = self._scene.addLine(cx_ref, cy_ref, cx_new, cy_new, pen_line)
-            conn.setZValue(3)
+            conn.setZValue(4)
             self._overlay_items.append(conn)
 
     def draw_edges(self, edges: np.ndarray) -> None:
