@@ -74,10 +74,15 @@ class InspectionPanel(QWidget):
         self._ref_image: np.ndarray | None = None
         self._insp_image: np.ndarray | None = None
         self._roi: ROI | None = None
+        self._insp_roi: ROI | None = None              # ROI pre inšpekčný obraz
         self._ref_edges: np.ndarray | None = None  # cache edge mask for projection
+        self._insp_edges: np.ndarray | None = None     # edge maska inšpekčného obrazu
         self._edge_worker: _EdgeWorker | None = None  # background DexiNed thread
         self._segment_labels: np.ndarray | None = None   # int32 label mapa (cv2.connectedComponents)
         self._removed_labels: set[int] = set()
+        self._erased_mask: np.ndarray | None = None      # uint8 pixel-level maska; 0 = vymazaný pixel
+        self._undo_stack: list[tuple[frozenset[int], np.ndarray | None]] = []
+        self._selected_label: int | None = None          # vybraný segment pre template matching
 
         self._build_ui()
         self._connect_signals()
@@ -238,6 +243,7 @@ class InspectionPanel(QWidget):
         right_layout.addWidget(self._build_roi_group())
         right_layout.addWidget(self._build_edge_group())
         right_layout.addWidget(self._build_insp_group())
+        right_layout.addWidget(self._build_insp_roi_group())
         right_layout.addWidget(self._build_algo_group())
         right_layout.addWidget(self._build_calib_group())
         right_layout.addWidget(self._build_profile_group())
@@ -445,19 +451,82 @@ class InspectionPanel(QWidget):
 
         layout.addWidget(self._edge_params_stack)
 
-        # Odstraňovanie segmentov hrán
-        seg_row = QHBoxLayout()
-        self._remove_seg_btn = QPushButton("Odstrániť segmenty")
+        # Min. dĺžka segmentu
+        min_len_row = QHBoxLayout()
+        min_len_row.addWidget(QLabel("Min. dĺžka segmentu [px]:"))
+        self._min_seg_len_spin = QSpinBox()
+        self._min_seg_len_spin.setRange(0, 9999)
+        self._min_seg_len_spin.setValue(0)
+        self._min_seg_len_spin.setToolTip(
+            "Segmenty kratšie ako tento počet pixelov budú automaticky odfiltrované.\n"
+            "0 = žiadny filter (zachová sa všetko)."
+        )
+        min_len_row.addWidget(self._min_seg_len_spin)
+        layout.addLayout(min_len_row)
+
+        # Odstraňovanie segmentov hrán — riadok 1: klik + oblasť
+        seg_row1 = QHBoxLayout()
+        self._remove_seg_btn = QPushButton("Odstrániť (klik)")
         self._remove_seg_btn.setCheckable(True)
         self._remove_seg_btn.setToolTip("Klikni na hranu v referenčnom obraze pre jej odstránenie.")
+        self._area_seg_btn = QPushButton("Odstrániť (oblasť)")
+        self._area_seg_btn.setCheckable(True)
+        self._area_seg_btn.setToolTip("Ťahaj obdĺžnik — odstráni všetky segmenty v oblasti.")
+        seg_row1.addWidget(self._remove_seg_btn)
+        seg_row1.addWidget(self._area_seg_btn)
+        layout.addLayout(seg_row1)
+
+        # Riadok 2: undo + reset
+        seg_row2 = QHBoxLayout()
+        self._undo_seg_btn = QPushButton("Späť (Ctrl+Z)")
+        self._undo_seg_btn.setEnabled(False)
+        self._undo_seg_btn.setToolTip("Vráti posledné odstránenie segmentu.")
         self._reset_seg_btn = QPushButton("Resetovať")
         self._reset_seg_btn.setEnabled(False)
-        seg_row.addWidget(self._remove_seg_btn)
-        seg_row.addWidget(self._reset_seg_btn)
-        layout.addLayout(seg_row)
+        seg_row2.addWidget(self._undo_seg_btn)
+        seg_row2.addWidget(self._reset_seg_btn)
+        layout.addLayout(seg_row2)
+
         self._seg_count_label = QLabel("Odstránených: 0 segmentov")
         self._seg_count_label.setStyleSheet("color: #aaaaaa; font-size: 10px;")
         layout.addWidget(self._seg_count_label)
+
+        # ── Select mode + template matching ──────────────────────────────
+        from PyQt6.QtWidgets import QFrame
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color: #555;")
+        layout.addWidget(sep)
+
+        sel_row = QHBoxLayout()
+        self._select_seg_btn = QPushButton("Vybrať segment")
+        self._select_seg_btn.setCheckable(True)
+        self._select_seg_btn.setToolTip(
+            "Klikni na segment v referenčnom obraze pre jeho výber.\n"
+            "Vybraný segment sa použije pre template matching na inšpekčnom obraze."
+        )
+        self._clear_selection_btn = QPushButton("Zrušiť výber")
+        self._clear_selection_btn.setToolTip("Zruší výber segmentu.")
+        self._clear_selection_btn.setEnabled(False)
+        sel_row.addWidget(self._select_seg_btn)
+        sel_row.addWidget(self._clear_selection_btn)
+        layout.addLayout(sel_row)
+
+        self._seg_info_label = QLabel("Vybraný segment: —")
+        self._seg_info_label.setStyleSheet("color: #ffaa44; font-size: 10px;")
+        layout.addWidget(self._seg_info_label)
+
+        self._find_segment_btn = QPushButton("Hľadať segment na inšpekčnom obraze")
+        self._find_segment_btn.setEnabled(False)
+        self._find_segment_btn.setToolTip(
+            "Nájde vybraný segment na inšpekčnom obraze pomocou NCC template matchingu.\n"
+            "Ak je nastavené Inšpekčné ROI, vyhľadáva len v tej oblasti."
+        )
+        layout.addWidget(self._find_segment_btn)
+
+        self._match_result_label = QLabel("Výsledok: —")
+        self._match_result_label.setStyleSheet("color: #aaaaaa; font-size: 10px;")
+        self._match_result_label.setWordWrap(True)
+        layout.addWidget(self._match_result_label)
 
         return grp
 
@@ -470,6 +539,32 @@ class InspectionPanel(QWidget):
         self._insp_path_label.setWordWrap(True)
         layout.addWidget(btn)
         layout.addWidget(self._insp_path_label)
+        return grp
+
+    def _build_insp_roi_group(self) -> QGroupBox:
+        grp = QGroupBox("Inšpekčné ROI (oblasť vyhľadávania)")
+        layout = QVBoxLayout(grp)
+
+        btn_row = QHBoxLayout()
+        self._draw_insp_roi_btn = QPushButton("Kresliť ROI")
+        self._draw_insp_roi_btn.setCheckable(True)
+        self._draw_insp_roi_btn.setToolTip("Ťahaj obdĺžnik na inšpekčnom obraze pre nastavenie ROI.")
+        self._clear_insp_roi_btn = QPushButton("Zmazať ROI")
+        self._clear_insp_roi_btn.setToolTip("Zmaže inšpekčné ROI — hrany sa budú hľadať v celom obraze.")
+        btn_row.addWidget(self._draw_insp_roi_btn)
+        btn_row.addWidget(self._clear_insp_roi_btn)
+        layout.addLayout(btn_row)
+
+        form = QFormLayout()
+        self._insp_roi_x0 = QSpinBox(); self._insp_roi_x0.setRange(0, 9999)
+        self._insp_roi_y0 = QSpinBox(); self._insp_roi_y0.setRange(0, 9999)
+        self._insp_roi_x1 = QSpinBox(); self._insp_roi_x1.setRange(0, 9999)
+        self._insp_roi_y1 = QSpinBox(); self._insp_roi_y1.setRange(0, 9999)
+        form.addRow("x0:", self._insp_roi_x0)
+        form.addRow("y0:", self._insp_roi_y0)
+        form.addRow("x1:", self._insp_roi_x1)
+        form.addRow("y1:", self._insp_roi_y1)
+        layout.addLayout(form)
         return grp
 
     def _build_algo_group(self) -> QGroupBox:
@@ -611,8 +706,30 @@ class InspectionPanel(QWidget):
         self._run_btn.clicked.connect(self._on_run_alignment)
 
         self._remove_seg_btn.toggled.connect(self._on_remove_seg_mode_toggled)
+        self._area_seg_btn.toggled.connect(self._on_area_seg_mode_toggled)
         self._reset_seg_btn.clicked.connect(self._on_reset_segments)
+        self._undo_seg_btn.clicked.connect(self._on_undo_segment)
         self._ref_viewer.image_clicked.connect(self._on_ref_image_clicked)
+        self._ref_viewer.segment_area_selected.connect(self._on_segment_area_selected)
+
+        # Select mode + template matching
+        self._select_seg_btn.toggled.connect(self._on_select_seg_mode_toggled)
+        self._clear_selection_btn.clicked.connect(self._on_clear_selection)
+        self._find_segment_btn.clicked.connect(self._find_segment_on_inspection)
+
+        # Min-length filter
+        self._min_seg_len_spin.valueChanged.connect(self._on_edge_changed)
+
+        # Inšpekčné ROI
+        self._draw_insp_roi_btn.toggled.connect(self._insp_viewer.set_roi_mode)
+        self._clear_insp_roi_btn.clicked.connect(self._on_clear_insp_roi)
+        self._insp_viewer.roi_selected.connect(self._on_insp_roi_selected)
+        for spin in (self._insp_roi_x0, self._insp_roi_y0, self._insp_roi_x1, self._insp_roi_y1):
+            spin.valueChanged.connect(self._on_insp_roi_spinbox_changed)
+
+        from PyQt6.QtGui import QKeySequence, QShortcut
+        self._undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
+        self._undo_shortcut.activated.connect(self._on_undo_segment)
 
     # ------------------------------------------------------------------
     # Handlery
@@ -653,11 +770,19 @@ class InspectionPanel(QWidget):
                 return
             self._insp_image = img
             self._insp_viewer.set_image(img)
+            if self._insp_roi is not None:
+                self._insp_viewer.draw_roi(self._insp_roi)
+                self._update_insp_roi_spinboxes()
             self._insp_path_label.setText(path)
+            self._update_insp_edges()
+            # Aktivuj "Hľadať" ak je segment vybraný
+            if self._selected_label is not None:
+                self._find_segment_btn.setEnabled(True)
 
     def _on_roi_selected(self, x0: int, y0: int, x1: int, y1: int) -> None:
         self._draw_roi_btn.setChecked(False)
         self._remove_seg_btn.setChecked(False)
+        self._area_seg_btn.setChecked(False)
         try:
             roi = ROI(x0, y0, x1, y1)
             if not roi.is_valid():
@@ -667,7 +792,7 @@ class InspectionPanel(QWidget):
             self._ref_viewer.draw_roi(roi)
             self._update_ref_edges()
             self._emit_profile_changed()
-        except Exception:
+        except ValueError:
             pass
 
     def _on_clear_roi(self) -> None:
@@ -675,6 +800,7 @@ class InspectionPanel(QWidget):
         self._ref_edges = None
         self._segment_labels = None
         self._removed_labels.clear()
+        self._undo_stack.clear()
         self._update_seg_ui()
         self._ref_viewer.clear_roi()
         self._ref_viewer.clear_overlay()
@@ -697,7 +823,7 @@ class InspectionPanel(QWidget):
                 self._ref_viewer.draw_roi(roi)
                 self._update_ref_edges()
                 self._emit_profile_changed()
-            except Exception:
+            except ValueError:
                 pass
 
     def _on_browse_dexined_weights(self) -> None:
@@ -734,6 +860,7 @@ class InspectionPanel(QWidget):
 
     def _on_edge_changed(self) -> None:
         self._update_ref_edges()
+        self._update_insp_edges()
         self._emit_profile_changed()
 
     def _on_run_alignment(self) -> None:
@@ -813,7 +940,7 @@ class InspectionPanel(QWidget):
         # Aktualizuj inšpekčný viewer — zobraz pracovnú (príp. resizovanú) verziu
         self._insp_viewer.set_image(insp_work)
 
-        # Projektuj referenčné hrany na inšpekčný obraz (zelená farba — odlíšenie od cyanových ref hrán)
+        # Projektuj referenčné hrany na inšpekčný obraz (zelená farba)
         projected_rgba: np.ndarray | None = None
         active_edges = self._active_ref_edges
         if active_edges is not None:
@@ -831,6 +958,27 @@ class InspectionPanel(QWidget):
             rgba = np.zeros((h_out, w_out, 4), dtype=np.uint8)
             rgba[projected > 0] = [0, 255, 80, 220]  # RGBA zelená
             projected_rgba = np.ascontiguousarray(rgba)
+
+        # Zlúč s inšpekčnými hranami (cyan) ak sú dostupné
+        # Cyan vrstva ide pod zelenú (ref. hrany majú prednosť)
+        if self._insp_edges is not None:
+            h_i, w_i = self._insp_image.shape[:2]
+            h_ie, w_ie = self._insp_edges.shape
+            h_c = min(h_i, h_ie)
+            w_c = min(w_i, w_ie)
+            cyan_rgba = np.zeros((h_c, w_c, 4), dtype=np.uint8)
+            cyan_rgba[self._insp_edges[:h_c, :w_c] > 0] = [0, 220, 255, 180]  # cyan
+            if projected_rgba is not None:
+                # Prepíš cyan pixely zelenou kde sú ref. hrany
+                h_p, w_p = projected_rgba.shape[:2]
+                h_m = min(h_c, h_p)
+                w_m = min(w_c, w_p)
+                green_mask = projected_rgba[:h_m, :w_m, 3] > 0
+                combined = cyan_rgba.copy()
+                combined[:h_m, :w_m][green_mask] = projected_rgba[:h_m, :w_m][green_mask]
+                projected_rgba = np.ascontiguousarray(combined)
+            else:
+                projected_rgba = cyan_rgba
 
         self._insp_viewer.draw_overlay(result.dx_px, result.dy_px, projected_rgba)
 
@@ -919,8 +1067,14 @@ class InspectionPanel(QWidget):
         else:
             edges_full = detect_edges(gray, method, **params)
 
+        # Min-length filter pred uložením
+        _, lbl_full = cv2.connectedComponents(edges_full, connectivity=8)
+        edges_full = self._apply_min_length_filter(edges_full, lbl_full)
+
         self._ref_edges = edges_full
         self._removed_labels.clear()
+        self._erased_mask = np.ones_like(edges_full, dtype=np.uint8) * 255
+        self._undo_stack.clear()
         self._segment_labels = self._compute_segment_labels(edges_full)
         self._update_seg_ui()
         self._ref_viewer.draw_edges(edges_full)
@@ -989,8 +1143,14 @@ class InspectionPanel(QWidget):
     @pyqtSlot(object)
     def _on_edge_result(self, edges: np.ndarray) -> None:
         """Prijme výsledok z EdgeWorker threadu (DexiNed)."""
+        # Min-length filter
+        _, lbl = cv2.connectedComponents(edges, connectivity=8)
+        edges = self._apply_min_length_filter(edges, lbl)
+
         self._ref_edges = edges
         self._removed_labels.clear()
+        self._erased_mask = np.ones_like(edges, dtype=np.uint8) * 255
+        self._undo_stack.clear()
         self._segment_labels = self._compute_segment_labels(edges)
         self._update_seg_ui()
         self._ref_viewer.draw_edges(edges)
@@ -1009,14 +1169,15 @@ class InspectionPanel(QWidget):
 
     @property
     def _active_ref_edges(self) -> np.ndarray | None:
-        """Edge maska bez odstránených segmentov."""
+        """Edge maska bez odstránených segmentov a vymazaných pixelov."""
         if self._ref_edges is None:
             return None
-        if not self._removed_labels or self._segment_labels is None:
-            return self._ref_edges
         mask = self._ref_edges.copy()
-        for lbl in self._removed_labels:
-            mask[self._segment_labels == lbl] = 0
+        if self._removed_labels and self._segment_labels is not None:
+            for lbl in self._removed_labels:
+                mask[self._segment_labels == lbl] = 0
+        if self._erased_mask is not None:
+            mask &= self._erased_mask      # pixel-level erase
         return mask
 
     def _compute_segment_labels(self, edges: np.ndarray) -> np.ndarray:
@@ -1025,14 +1186,39 @@ class InspectionPanel(QWidget):
         return labels
 
     def _update_seg_ui(self) -> None:
-        n = len(self._removed_labels)
-        self._seg_count_label.setText(f"Odstránených: {n} segmentov")
-        self._reset_seg_btn.setEnabled(n > 0)
+        n_comp = len(self._removed_labels)
+        n_px = 0
+        if self._erased_mask is not None and self._ref_edges is not None:
+            n_px = int(np.count_nonzero(self._ref_edges & (~self._erased_mask)))
+        parts = []
+        if n_comp:
+            parts.append(f"{n_comp} segm.")
+        if n_px:
+            parts.append(f"{n_px} px")
+        self._seg_count_label.setText("Odstránených: " + (", ".join(parts) or "0"))
+        self._reset_seg_btn.setEnabled(n_comp > 0 or n_px > 0)
+        self._undo_seg_btn.setEnabled(len(self._undo_stack) > 0)
+
+    def _push_undo(self) -> None:
+        """Uloží aktuálny stav pred každou deštruktívnou operáciou."""
+        em = self._erased_mask.copy() if self._erased_mask is not None else None
+        self._undo_stack.append((frozenset(self._removed_labels), em))
 
     def _on_remove_seg_mode_toggled(self, enabled: bool) -> None:
         if enabled:
             self._draw_roi_btn.setChecked(False)
-        self._ref_viewer.set_click_mode(enabled)
+            self._area_seg_btn.setChecked(False)
+            self._select_seg_btn.setChecked(False)
+        from src.gui.image_viewer import ViewerMode
+        self._ref_viewer.set_mode(ViewerMode.CLICK if enabled else ViewerMode.NONE)
+
+    def _on_area_seg_mode_toggled(self, enabled: bool) -> None:
+        if enabled:
+            self._draw_roi_btn.setChecked(False)
+            self._remove_seg_btn.setChecked(False)
+            self._select_seg_btn.setChecked(False)
+        from src.gui.image_viewer import ViewerMode
+        self._ref_viewer.set_mode(ViewerMode.SEGMENT_AREA if enabled else ViewerMode.NONE)
 
     def _on_ref_image_clicked(self, x: int, y: int) -> None:
         if self._segment_labels is None or self._ref_edges is None:
@@ -1042,13 +1228,321 @@ class InspectionPanel(QWidget):
             return
         label = int(self._segment_labels[y, x])
         if label == 0:
-            return  # background — nič neodstráni
-        self._removed_labels.add(label)
+            return  # background
+
+        if self._select_seg_btn.isChecked():
+            # SELECT MODE: vyber segment pre template matching
+            self._selected_label = label
+            self._update_seg_info()
+            self._ref_viewer.draw_edges_with_selection(
+                self._active_ref_edges, self._segment_labels, label
+            )
+        else:
+            # REMOVE MODE (pôvodné správanie)
+            self._push_undo()
+            self._removed_labels.add(label)
+            self._update_seg_ui()
+            self._ref_viewer.draw_edges(self._active_ref_edges)
+
+    @pyqtSlot(int, int, int, int)
+    def _on_segment_area_selected(self, x0: int, y0: int, x1: int, y1: int) -> None:
+        """Vymaže pixely hrán priamo v oblasti (pixel-level erase, nie celé komponenty)."""
+        if self._ref_edges is None or self._erased_mask is None:
+            return
+        h, w = self._ref_edges.shape
+        x0c, y0c = max(0, x0), max(0, y0)
+        x1c, y1c = min(w, x1), min(h, y1)
+        if x1c <= x0c or y1c <= y0c:
+            return
+        # Overenie či sú v oblasti nejaké aktívne hrany (aby sa nerobil zbytočný undo)
+        active_in_region = self._ref_edges[y0c:y1c, x0c:x1c] & self._erased_mask[y0c:y1c, x0c:x1c]
+        if not np.any(active_in_region):
+            return
+        self._push_undo()
+        self._erased_mask[y0c:y1c, x0c:x1c] = 0   # vymaž všetky pixely v obdĺžniku
+        # Recompute labels — pixel erase mohol rozbiť komponent na dva nezávislé
+        active = self._active_ref_edges
+        self._segment_labels = self._compute_segment_labels(active)
         self._update_seg_ui()
-        self._ref_viewer.draw_edges(self._active_ref_edges)
+        self._ref_viewer.draw_edges(active)
+
+    def _on_undo_segment(self) -> None:
+        """Vráti posledné odstránenie segmentu (Ctrl+Z)."""
+        if not self._undo_stack:
+            return
+        prev_labels, prev_mask = self._undo_stack.pop()
+        self._removed_labels = set(prev_labels)
+        self._erased_mask = prev_mask
+        active = self._active_ref_edges
+        if active is not None:
+            self._segment_labels = self._compute_segment_labels(active)
+        self._update_seg_ui()
+        self._ref_viewer.draw_edges(active)
 
     def _on_reset_segments(self) -> None:
         self._removed_labels.clear()
-        self._update_seg_ui()
         if self._ref_edges is not None:
-            self._ref_viewer.draw_edges(self._ref_edges)
+            self._erased_mask = np.ones_like(self._ref_edges, dtype=np.uint8) * 255
+            self._segment_labels = self._compute_segment_labels(self._ref_edges)
+        self._undo_stack.clear()
+        self._update_seg_ui()
+        self._ref_viewer.draw_edges(self._active_ref_edges)
+
+    # ------------------------------------------------------------------
+    # Min-length filter
+    # ------------------------------------------------------------------
+
+    def _apply_min_length_filter(self, edges: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        """Odfiltruje segmenty kratšie ako _min_seg_len_spin pixelov."""
+        min_len = self._min_seg_len_spin.value()
+        if min_len <= 0:
+            return edges
+        result = edges.copy()
+        n_labels = int(labels.max())
+        for lbl in range(1, n_labels + 1):
+            if np.count_nonzero(labels == lbl) < min_len:
+                result[labels == lbl] = 0
+        return result
+
+    # ------------------------------------------------------------------
+    # Detekcia hrán na inšpekčnom obraze
+    # ------------------------------------------------------------------
+
+    def _update_insp_edges(self) -> None:
+        """Detekuje hrany na inšpekčnom obraze (rovnaká metóda ako ref.) a zobrazí ich."""
+        if self._insp_image is None:
+            return
+
+        gray = (cv2.cvtColor(self._insp_image, cv2.COLOR_BGR2GRAY)
+                if self._insp_image.ndim == 3 else self._insp_image.copy())
+
+        method = self._edge_method_combo.currentText()
+        params = self._get_edge_params()
+
+        roi = self._insp_roi
+        if roi is not None:
+            h_img, w_img = gray.shape
+            x0c = max(0, roi.x0)
+            y0c = max(0, roi.y0)
+            x1c = min(w_img, roi.x1)
+            y1c = min(h_img, roi.y1)
+            if x1c > x0c and y1c > y0c:
+                edges_full = np.zeros(gray.shape, dtype=np.uint8)
+                edges_full[y0c:y1c, x0c:x1c] = detect_edges(
+                    gray[y0c:y1c, x0c:x1c], method, **params
+                )
+            else:
+                edges_full = detect_edges(gray, method, **params)
+        else:
+            edges_full = detect_edges(gray, method, **params)
+
+        # Min-length filter
+        min_len = self._min_seg_len_spin.value()
+        if min_len > 0:
+            _, lbl = cv2.connectedComponents(edges_full, connectivity=8)
+            edges_full = self._apply_min_length_filter(edges_full, lbl)
+
+        self._insp_edges = edges_full
+        self._insp_viewer.draw_edges(edges_full)
+
+    # ------------------------------------------------------------------
+    # Inšpekčné ROI handlery
+    # ------------------------------------------------------------------
+
+    def _on_insp_roi_selected(self, x0: int, y0: int, x1: int, y1: int) -> None:
+        self._draw_insp_roi_btn.setChecked(False)
+        try:
+            roi = ROI(x0, y0, x1, y1)
+            if not roi.is_valid():
+                return
+            self._insp_roi = roi
+            self._update_insp_roi_spinboxes()
+            self._insp_viewer.draw_roi(roi)
+            self._update_insp_edges()
+        except ValueError:
+            pass
+
+    def _on_clear_insp_roi(self) -> None:
+        self._insp_roi = None
+        self._insp_viewer.clear_roi()
+        for spin in (self._insp_roi_x0, self._insp_roi_y0, self._insp_roi_x1, self._insp_roi_y1):
+            spin.blockSignals(True)
+            spin.setValue(0)
+            spin.blockSignals(False)
+        self._update_insp_edges()
+
+    def _on_insp_roi_spinbox_changed(self) -> None:
+        x0 = self._insp_roi_x0.value()
+        y0 = self._insp_roi_y0.value()
+        x1 = self._insp_roi_x1.value()
+        y1 = self._insp_roi_y1.value()
+        if x1 > x0 and y1 > y0:
+            try:
+                roi = ROI(x0, y0, x1, y1)
+                self._insp_roi = roi
+                self._insp_viewer.draw_roi(roi)
+                self._update_insp_edges()
+            except ValueError:
+                pass
+
+    # ------------------------------------------------------------------
+    # Select mode + template matching
+    # ------------------------------------------------------------------
+
+    def _on_select_seg_mode_toggled(self, enabled: bool) -> None:
+        """Prepína select mode — klik = vyber segment (nie odstrán)."""
+        if enabled:
+            self._draw_roi_btn.setChecked(False)
+            self._remove_seg_btn.setChecked(False)
+            self._area_seg_btn.setChecked(False)
+        from src.gui.image_viewer import ViewerMode
+        self._ref_viewer.set_mode(ViewerMode.CLICK if enabled else ViewerMode.NONE)
+
+    def _on_clear_selection(self) -> None:
+        """Zruší výber segmentu a resetuje overlay."""
+        self._selected_label = None
+        self._update_seg_info()
+        # Obnov normálne zobrazenie hrán
+        active = self._active_ref_edges
+        if active is not None:
+            self._ref_viewer.draw_edges(active)
+        else:
+            self._ref_viewer.clear_overlay()
+
+    def _update_seg_info(self) -> None:
+        """Aktualizuje informačný label o vybranom segmente."""
+        if self._selected_label is None or self._segment_labels is None:
+            self._seg_info_label.setText("Vybraný segment: —")
+            self._clear_selection_btn.setEnabled(False)
+            self._find_segment_btn.setEnabled(False)
+        else:
+            n_px = int(np.count_nonzero(self._segment_labels == self._selected_label))
+            self._seg_info_label.setText(f"Vybraný segment: #{self._selected_label}  ({n_px} px)")
+            self._clear_selection_btn.setEnabled(True)
+            self._find_segment_btn.setEnabled(self._insp_image is not None)
+
+    def _find_segment_on_inspection(self) -> None:
+        """NCC template matching — nájde vybraný segment na inšpekčnom obraze.
+
+        Template = grayscale výrez referenčného obrazu okolo vybraného segmentu.
+        Výsledok = dx/dy odchýlka polohy od referenčnej pozície + NCC skóre.
+        """
+        if self._selected_label is None:
+            self._match_result_label.setText("Najprv vyber segment kliknutím.")
+            return
+        if self._segment_labels is None or self._ref_edges is None:
+            self._match_result_label.setText("Chýbajú hrany referenčného obrazu.")
+            return
+        if self._insp_image is None or self._ref_image is None:
+            self._match_result_label.setText("Najprv načítaj oba obrazy.")
+            return
+
+        # 1. Bounding box vybraného segmentu v referenčnom obraze
+        seg_px = np.where(self._segment_labels == self._selected_label)
+        ys, xs = seg_px
+        if len(xs) == 0:
+            self._match_result_label.setText("Vybraný segment je prázdny.")
+            return
+
+        pad = 20   # väčší padding = stabilnejší NCC na grayscale
+        h_ref, w_ref = self._ref_image.shape[:2]
+        x0 = max(0, int(xs.min()) - pad)
+        y0 = max(0, int(ys.min()) - pad)
+        x1 = min(w_ref, int(xs.max()) + pad + 1)
+        y1 = min(h_ref, int(ys.max()) + pad + 1)
+        tw, th = x1 - x0, y1 - y0
+
+        if tw < 5 or th < 5:
+            self._match_result_label.setText("Segment je príliš malý pre template matching.")
+            return
+
+        # 2. Template = grayscale výrez REFERENČNÉHO obrazu
+        ref_gray = (cv2.cvtColor(self._ref_image, cv2.COLOR_BGR2GRAY)
+                    if self._ref_image.ndim == 3 else self._ref_image.copy())
+        template_base = ref_gray[y0:y1, x0:x1].astype(np.float32)
+
+        # 3. Search image = grayscale inšpekčný obraz (alebo jeho ROI crop)
+        insp_gray = (cv2.cvtColor(self._insp_image, cv2.COLOR_BGR2GRAY)
+                     if self._insp_image.ndim == 3 else self._insp_image.copy())
+
+        if self._insp_roi is not None:
+            roi = self._insp_roi
+            hi, wi = insp_gray.shape
+            rx0 = max(0, roi.x0); ry0 = max(0, roi.y0)
+            rx1 = min(wi, roi.x1); ry1 = min(hi, roi.y1)
+            if rx1 > rx0 and ry1 > ry0:
+                insp_crop = insp_gray[ry0:ry1, rx0:rx1].astype(np.float32)
+                off_x, off_y = rx0, ry0
+            else:
+                insp_crop = insp_gray.astype(np.float32)
+                off_x, off_y = 0, 0
+        else:
+            insp_crop = insp_gray.astype(np.float32)
+            off_x, off_y = 0, 0
+
+        # 4. Multi-scale template matching — hľadaj pri rôznych merítach
+        #    Rozsah: 0.4× – 1.6× v krokoch 0.1 (zvláda veľké rozdiely zoom-u)
+        scales = [round(s * 0.1, 1) for s in range(4, 17)]   # 0.4 … 1.6
+        best_val = -2.0
+        best_loc = (0, 0)
+        best_scale = 1.0
+        best_tw = tw
+        best_th = th
+
+        sh, sw = insp_crop.shape[:2]
+        for scale in scales:
+            s_tw = max(1, int(round(tw * scale)))
+            s_th = max(1, int(round(th * scale)))
+            if s_th > sh or s_tw > sw:
+                continue   # template väčší ako search area — preskočiť
+            if s_tw < 4 or s_th < 4:
+                continue   # príliš malý template — nestabilný NCC
+            scaled_tpl = cv2.resize(template_base, (s_tw, s_th),
+                                    interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
+            result_map = cv2.matchTemplate(insp_crop, scaled_tpl, cv2.TM_CCOEFF_NORMED)
+            _, max_v, _, max_l = cv2.minMaxLoc(result_map)
+            if max_v > best_val:
+                best_val = max_v
+                best_loc = max_l
+                best_scale = scale
+                best_tw = s_tw
+                best_th = s_th
+
+        if best_val < -1.5:
+            self._match_result_label.setText("Search area je príliš malá pre všetky merítka.")
+            self._match_result_label.setStyleSheet("color: #ff6666; font-size: 10px;")
+            return
+
+        # 5. Absolútna poloha nájdeného templatu v inšpekčnom obraze
+        match_x = best_loc[0] + off_x
+        match_y = best_loc[1] + off_y
+
+        # 6. Odchýlka od referenčnej pozície (dx = posun medzi ref a insp v px)
+        dx = match_x - x0
+        dy = match_y - y0
+
+        # 7. Aktualizuj výsledkový label
+        sign_x = "+" if dx >= 0 else ""
+        sign_y = "+" if dy >= 0 else ""
+        scale_info = f"  merítko={best_scale:.1f}×" if abs(best_scale - 1.0) > 0.05 else ""
+        self._match_result_label.setText(
+            f"dx={sign_x}{dx}px  dy={sign_y}{dy}px\n"
+            f"Poloha: x={match_x} y={match_y}{scale_info}\n"
+            f"NCC={best_val:.3f}"
+        )
+        color = "#44ff88" if best_val >= 0.7 else ("#ffcc00" if best_val >= 0.5 else "#ff6666")
+        self._match_result_label.setStyleSheet(f"color: {color}; font-size: 10px;")
+
+        # 8. Overlay: oranžový prerušovaný = ref. poloha, zelený/žltý/červený = nájdená
+        self._insp_viewer.draw_match_result(x0, y0, tw, th, match_x, match_y, best_val)
+
+    def _update_insp_roi_spinboxes(self) -> None:
+        if self._insp_roi is None:
+            return
+        for spin, val in zip(
+            (self._insp_roi_x0, self._insp_roi_y0, self._insp_roi_x1, self._insp_roi_y1),
+            (self._insp_roi.x0, self._insp_roi.y0, self._insp_roi.x1, self._insp_roi.y1),
+        ):
+            spin.blockSignals(True)
+            spin.setValue(val)
+            spin.blockSignals(False)

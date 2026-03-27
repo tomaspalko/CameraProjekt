@@ -60,17 +60,20 @@ def test_clahe_increases_contrast():
 def test_all_black_image_does_not_crash():
     black = np.zeros((256, 256), dtype=np.uint8)
     result = preprocess(black)
-    assert result is not None
+    assert result.shape == black.shape
+    assert result.dtype == np.uint8
 
 def test_all_white_image_does_not_crash():
     white = np.full((256, 256), 255, dtype=np.uint8)
     result = preprocess(white)
-    assert result is not None
+    assert result.shape == white.shape
+    assert result.dtype == np.uint8
 
 def test_single_pixel_image_does_not_crash():
     img = np.array([[128]], dtype=np.uint8)
     result = preprocess(img)
-    assert result is not None
+    assert result.shape == img.shape
+    assert result.dtype == np.uint8
 
 @pytest.mark.parametrize("clahe_clip", [1.0, 2.0, 4.0, 8.0])
 def test_various_clahe_clips(gray_image, clahe_clip):
@@ -96,9 +99,19 @@ def test_auto_clahe_output_dtype(gray_image):
 def test_auto_clahe_does_not_crash_black():
     black = np.zeros((256, 256), dtype=np.uint8)
     result = preprocess(black, auto_clahe=True)
-    assert result is not None
+    assert result.shape == black.shape
+    assert result.dtype == np.uint8
 
 def test_auto_clahe_does_not_crash_white():
     white = np.full((256, 256), 255, dtype=np.uint8)
     result = preprocess(white, auto_clahe=True)
-    assert result is not None
+    assert result.shape == white.shape
+    assert result.dtype == np.uint8
+
+def test_auto_clahe_uniform_image():
+    """Perfectly uniform image (std=0, gradient=0) must not crash or produce invalid output."""
+    uniform = np.full((256, 256), 100, dtype=np.uint8)
+    result = preprocess(uniform, auto_clahe=True)
+    assert result.shape == uniform.shape
+    assert result.dtype == np.uint8
+    assert 0 <= int(result.min()) <= int(result.max()) <= 255

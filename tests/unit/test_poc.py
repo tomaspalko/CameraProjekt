@@ -117,13 +117,26 @@ def test_poc_confidence_good_image():
 def test_poc_does_not_crash_dark_image():
     dark = np.zeros((256, 256), dtype=np.uint8)
     result = poc_align(dark, dark)
-    assert result is not None
+    for key in ("dx_px", "dy_px", "angle_deg", "confidence"):
+        assert key in result
+    assert 0.0 <= result["confidence"] <= 1.0
 
 
 def test_poc_does_not_crash_uniform_image():
     flat = np.full((256, 256), 128, dtype=np.uint8)
     result = poc_align(flat, flat)
-    assert result is not None
+    for key in ("dx_px", "dy_px", "angle_deg", "confidence"):
+        assert key in result
+    assert 0.0 <= result["confidence"] <= 1.0
+
+
+def test_poc_same_image_high_confidence():
+    """Identical inputs should yield confidence well above the minimum threshold."""
+    from tests.synthetic.generator import make_textured
+    ref = make_textured(size=(256, 256), seed=7)
+    result = poc_align(ref, ref)
+    assert result["confidence"] > POC_MIN_CONFIDENCE, \
+        f"Expected confidence > {POC_MIN_CONFIDENCE} for identical images, got {result['confidence']:.3f}"
 
 
 # ── Integration with aligner.py routing ──────────────────────────────────────

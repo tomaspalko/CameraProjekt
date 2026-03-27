@@ -291,7 +291,7 @@ class ReferenceEditor(QWidget):
             self._update_roi_spinboxes()
             self._viewer.draw_roi(roi)
             self._emit_profile_changed()
-        except Exception:
+        except ValueError:
             pass
 
     def _on_clear_roi(self) -> None:
@@ -314,7 +314,7 @@ class ReferenceEditor(QWidget):
                 self._roi = roi
                 self._viewer.draw_roi(roi)
                 self._emit_profile_changed()
-            except Exception:
+            except ValueError:
                 pass
 
     def _update_roi_spinboxes(self) -> None:
@@ -420,12 +420,22 @@ class ReferenceEditor(QWidget):
             f"spoľahlivosť = {result.confidence:.4f}"
         )
 
-        # Overlay: Canny hrany testovacej snímky + šípka
-        edges = cv2.Canny(test_pre, 50, 150)
-        self._viewer.set_image(self._ref_image)
+        # Overlay: projektuj referenčné hrany na testovaciu snímku + šípka
+        edges_ref = cv2.Canny(ref_pre, 50, 150)
+        h_e, w_e = edges_ref.shape
+        cx, cy = w_e / 2.0, h_e / 2.0
+        M = cv2.getRotationMatrix2D((cx, cy), result.angle_deg, 1.0)
+        M[0, 2] += result.dx_px
+        M[1, 2] += result.dy_px
+        projected = cv2.warpAffine(edges_ref, M, (w_e, h_e))
+        rgba = np.zeros((h_e, w_e, 4), dtype=np.uint8)
+        rgba[projected > 0] = [0, 255, 80, 220]   # zelená
+        projected_rgba = np.ascontiguousarray(rgba)
+
+        self._viewer.set_image(self._test_image)
         if self._roi is not None:
             self._viewer.draw_roi(self._roi)
-        self._viewer.draw_overlay(result.dx_px, result.dy_px, edges)
+        self._viewer.draw_overlay(result.dx_px, result.dy_px, projected_rgba)
 
     def _refresh_profile_list(self) -> None:
         names = self._config_mgr.list_profiles()

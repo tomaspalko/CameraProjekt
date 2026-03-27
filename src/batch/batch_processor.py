@@ -201,6 +201,7 @@ def _write_json_batch(batch_result: BatchResult, path: Path) -> None:
 def process_batch(
     reference_path,
     image_folder,
+    algorithm: str = "ECC",
     export_csv=None,
     export_json=None,
 ) -> list[dict]:
@@ -209,6 +210,7 @@ def process_batch(
     Args:
         reference_path: Path to the reference image file.
         image_folder:   Directory containing images to process.
+        algorithm:      Alignment algorithm ("ECC" or "POC").
         export_csv:     Optional path to write a CSV results file.
         export_json:    Optional path to write a JSON results file.
 
@@ -227,7 +229,7 @@ def process_batch(
 
     results = _run_batch(
         ref_raw, image_folder,
-        mask=None, algorithm="ECC",
+        mask=None, algorithm=algorithm,
         max_iter=5000, epsilon=1e-8, mm_per_px=1.0,
     )
 

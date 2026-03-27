@@ -34,7 +34,7 @@ def preprocess(
     if auto_clahe:
         gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
         gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-        grad_std = float(np.sqrt(gx ** 2 + gy ** 2).std()) + 1e-8
+        grad_std = float(cv2.magnitude(gx, gy).std()) + 1e-8
         clahe_clip = float(np.clip(2.0 * 50.0 / grad_std, 1.0, 4.0))
 
     clahe = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(8, 8))

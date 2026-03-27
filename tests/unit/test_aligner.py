@@ -94,12 +94,26 @@ def test_confidence_bad_image_is_low():
 def test_align_does_not_crash_on_dark_image():
     dark = np.zeros((256, 256), dtype=np.uint8)
     result = align(dark, dark)
-    assert result is not None
+    for key in ("dx_px", "dy_px", "angle_deg", "confidence"):
+        assert key in result
+    assert 0.0 <= result["confidence"] <= 1.0
 
 def test_align_does_not_crash_on_uniform_image():
     flat = np.full((256, 256), 128, dtype=np.uint8)
     result = align(flat, flat)
-    assert result is not None
+    for key in ("dx_px", "dy_px", "angle_deg", "confidence"):
+        assert key in result
+    assert 0.0 <= result["confidence"] <= 1.0
+
+
+def test_align_all_zero_mask_does_not_crash():
+    """All-zero mask (no valid pixels) must not crash — returns neutral result."""
+    ref, img, _ = make_pair(2.0, 1.0, 0.3)
+    mask = np.zeros(ref.shape, dtype=np.uint8)
+    result = align(ref, img, mask=mask)
+    for key in ("dx_px", "dy_px", "angle_deg", "confidence"):
+        assert key in result
+    assert 0.0 <= result["confidence"] <= 1.0
 
 
 # ── RMS over all accuracy cases ───────────────────────────────────────────────

@@ -160,6 +160,8 @@ def _run_gui(args) -> int:
     app = QApplication(sys.argv)
     win = MainWindow(profiles_dir=args.profiles_dir)
     win.show()
+    win.raise_()
+    win.activateWindow()
     return app.exec()
 
 

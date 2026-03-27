@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import cv2
 import math
+from enum import IntEnum
+
 import numpy as np
 from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QColor, QPen, QBrush, QPainter
@@ -14,6 +16,14 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.roi import ROI
+
+
+class ViewerMode(IntEnum):
+    """Režim ImageViewera — určuje ako sa interpretujú udalosti myši."""
+    NONE         = 0
+    ROI          = 1   # rubber-band → emituje roi_selected
+    CLICK        = 2   # single klik → emituje image_clicked
+    SEGMENT_AREA = 3   # rubber-band → emituje segment_area_selected
 
 
 def _numpy_to_pixmap(img: np.ndarray) -> QPixmap:
@@ -36,7 +46,8 @@ class ImageViewer(QWidget):
     """
 
     roi_selected = pyqtSignal(int, int, int, int)
-    image_clicked = pyqtSignal(int, int)   # (x, y) v súradniciach obrazu
+    image_clicked = pyqtSignal(int, int)            # (x, y) v súradniciach obrazu
+    segment_area_selected = pyqtSignal(int, int, int, int)  # (x0, y0, x1, y1) pre výber segmentov
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -54,9 +65,8 @@ class ImageViewer(QWidget):
         self._roi_item: QGraphicsRectItem | None = None
         self._overlay_items: list = []
 
-        # ROI rubber-band stav
-        self._roi_mode = False
-        self._click_mode = False
+        # Režim interakcie myšou
+        self._mode: ViewerMode = ViewerMode.NONE
         self._rb_origin: QPointF | None = None
         self._rubber_band: QRubberBand | None = None
 
@@ -78,22 +88,26 @@ class ImageViewer(QWidget):
         self._scene.setSceneRect(QRectF(px.rect()))
         self.fit_in_view()
 
-    def set_roi_mode(self, enabled: bool) -> None:
-        """Zapne/vypne režim kreslenia ROI myšou."""
-        self._roi_mode = enabled
-        if enabled:
+    def set_mode(self, mode: ViewerMode) -> None:
+        """Nastaví aktívny režim interakcie myšou."""
+        self._mode = mode
+        if mode in (ViewerMode.ROI, ViewerMode.SEGMENT_AREA):
             self._view.setDragMode(QGraphicsView.DragMode.NoDrag)
             self._view.setCursor(Qt.CursorShape.CrossCursor)
+        elif mode == ViewerMode.CLICK:
+            self._view.setCursor(Qt.CursorShape.PointingHandCursor)
         else:
             self._view.setCursor(Qt.CursorShape.ArrowCursor)
             if self._rubber_band:
                 self._rubber_band.hide()
 
+    def set_roi_mode(self, enabled: bool) -> None:
+        """Kompatibilný wrapper — zapne/vypne ROI mód."""
+        self.set_mode(ViewerMode.ROI if enabled else ViewerMode.NONE)
+
     def set_click_mode(self, enabled: bool) -> None:
-        """Zapne/vypne klikací mód — klik emituje image_clicked(x, y)."""
-        self._click_mode = enabled
-        cursor = Qt.CursorShape.PointingHandCursor if enabled else Qt.CursorShape.ArrowCursor
-        self._view.setCursor(cursor)
+        """Kompatibilný wrapper — zapne/vypne klikací mód."""
+        self.set_mode(ViewerMode.CLICK if enabled else ViewerMode.NONE)
 
     def draw_roi(self, roi: ROI) -> None:
         """Vykreslí prerušovaný obdĺžnik ROI."""
@@ -131,13 +145,12 @@ class ImageViewer(QWidget):
         # Canny hrany — grayscale maska alebo hotové RGBA
         if edges is not None:
             if edges.ndim == 3 and edges.shape[2] == 4:
-                # Už predpripravené RGBA — použij tobytes() pre bezpečný prenos do Qt
                 arr = np.ascontiguousarray(edges)
                 h, w = arr.shape[:2]
                 q_img = QImage(
-                    arr.tobytes(), w, h, w * 4, QImage.Format.Format_RGBA8888
+                    arr.data, w, h, w * 4, QImage.Format.Format_RGBA8888
                 )
-                px_item = self._scene.addPixmap(QPixmap.fromImage(q_img))
+                px_item = self._scene.addPixmap(QPixmap.fromImage(q_img.copy()))
                 px_item.setZValue(1)
                 self._overlay_items.append(px_item)
             elif edges.ndim == 2:
@@ -145,9 +158,9 @@ class ImageViewer(QWidget):
                 rgba = np.zeros((h, w, 4), dtype=np.uint8)
                 rgba[edges > 0] = edge_color
                 q_img = QImage(
-                    rgba.tobytes(), w, h, w * 4, QImage.Format.Format_RGBA8888
+                    rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888
                 )
-                px_item = self._scene.addPixmap(QPixmap.fromImage(q_img))
+                px_item = self._scene.addPixmap(QPixmap.fromImage(q_img.copy()))
                 px_item.setZValue(1)
                 self._overlay_items.append(px_item)
 
@@ -178,8 +191,8 @@ class ImageViewer(QWidget):
         h, w = edges.shape
         edge_color = np.zeros((h, w, 4), dtype=np.uint8)
         edge_color[edges > 0] = [0, 255, 255, 200]
-        q_img = QImage(edge_color.tobytes(), w, h, w * 4, QImage.Format.Format_RGBA8888)
-        px_item = self._scene.addPixmap(QPixmap.fromImage(q_img))
+        q_img = QImage(edge_color.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
+        px_item = self._scene.addPixmap(QPixmap.fromImage(q_img.copy()))
         px_item.setZValue(1)
         self._overlay_items.append(px_item)
 
@@ -200,9 +213,11 @@ class ImageViewer(QWidget):
 
     def eventFilter(self, source, event) -> bool:
         from PyQt6.QtCore import QEvent
-        from PyQt6.QtGui import QMouseEvent
 
-        if source is self._view.viewport() and self._roi_mode:
+        if source is not self._view.viewport():
+            return super().eventFilter(source, event)
+
+        if self._mode in (ViewerMode.ROI, ViewerMode.SEGMENT_AREA):
             if event.type() == QEvent.Type.MouseButtonPress:
                 self._rb_origin = event.position()
                 if self._rubber_band is None:
@@ -242,10 +257,13 @@ class ImageViewer(QWidget):
 
                 self._rb_origin = None
                 if x1 > x0 and y1 > y0:
-                    self.roi_selected.emit(x0, y0, x1, y1)
+                    if self._mode == ViewerMode.ROI:
+                        self.roi_selected.emit(x0, y0, x1, y1)
+                    else:
+                        self.segment_area_selected.emit(x0, y0, x1, y1)
                 return True
 
-        elif source is self._view.viewport() and self._click_mode:
+        elif self._mode == ViewerMode.CLICK:
             if event.type() == QEvent.Type.MouseButtonPress:
                 vp = event.position()
                 sp = self._view.mapToScene(int(vp.x()), int(vp.y()))
@@ -265,6 +283,97 @@ class ImageViewer(QWidget):
     # ------------------------------------------------------------------
     # Privátne
     # ------------------------------------------------------------------
+
+    def draw_edges_with_selection(
+        self,
+        edges: np.ndarray,
+        labels: np.ndarray,
+        selected_label: int,
+    ) -> None:
+        """Overlay hrán s výberom: vybraný segment oranžový, ostatné sivé."""
+        self.clear_overlay()
+        if self._pixmap_item is None or edges is None:
+            return
+        h, w = edges.shape[:2]
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        # Všetky aktívne hrany → sivé
+        rgba[edges > 0] = [80, 80, 80, 140]
+        # Vybraný segment → oranžový (prepíše sivú)
+        rgba[labels == selected_label] = [255, 165, 0, 240]
+        arr = np.ascontiguousarray(rgba)
+        q_img = QImage(arr.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
+        px_item = self._scene.addPixmap(QPixmap.fromImage(q_img.copy()))
+        px_item.setZValue(1)
+        self._overlay_items.append(px_item)
+
+    def draw_match_box(self, x: int, y: int, w: int, h: int, score: float) -> None:
+        """Nakreslí obdĺžnik výsledku template matchingu + NCC skóre text."""
+        color = QColor(0, 255, 0) if score >= 0.5 else QColor(255, 80, 80)
+        pen = QPen(color, 2)
+        rect = self._scene.addRect(float(x), float(y), float(w), float(h), pen,
+                                   QBrush(Qt.BrushStyle.NoBrush))
+        rect.setZValue(3)
+        self._overlay_items.append(rect)
+        txt = self._scene.addSimpleText(f"NCC={score:.2f}")
+        txt.setBrush(QBrush(color))
+        txt.setPos(float(x), float(y) - 16)
+        txt.setZValue(3)
+        self._overlay_items.append(txt)
+
+    def draw_match_result(
+        self,
+        ref_x: int, ref_y: int, w: int, h: int,
+        match_x: int, match_y: int,
+        score: float,
+    ) -> None:
+        """Zobrazí výsledok template matchingu:
+        - Prerušovaný oranžový box = referenčná poloha (kde BOL segment)
+        - Plný zelený/červený box  = nájdená poloha (kde JE)
+        - Žltá šípka               = vektor posunutia
+        - Text NCC skóre
+        """
+        # Referenčná poloha — prerušovaný oranžový obdĺžnik
+        pen_ref = QPen(QColor(255, 165, 0), 1, Qt.PenStyle.DashLine)
+        r_ref = self._scene.addRect(float(ref_x), float(ref_y), float(w), float(h),
+                                    pen_ref, QBrush(Qt.BrushStyle.NoBrush))
+        r_ref.setZValue(3)
+        self._overlay_items.append(r_ref)
+
+        # Nájdená poloha — plný obdĺžnik (zelená ≥ 0.7, žltá ≥ 0.5, červená inak)
+        if score >= 0.7:
+            found_color = QColor(0, 255, 80)
+        elif score >= 0.5:
+            found_color = QColor(255, 220, 0)
+        else:
+            found_color = QColor(255, 80, 80)
+        pen_found = QPen(found_color, 2)
+        r_found = self._scene.addRect(float(match_x), float(match_y), float(w), float(h),
+                                      pen_found, QBrush(Qt.BrushStyle.NoBrush))
+        r_found.setZValue(3)
+        self._overlay_items.append(r_found)
+
+        # Šípka od stredu ref → stred found
+        cx_ref = ref_x + w / 2.0
+        cy_ref = ref_y + h / 2.0
+        cx_match = match_x + w / 2.0
+        cy_match = match_y + h / 2.0
+        dx = cx_match - cx_ref
+        dy = cy_match - cy_ref
+        if abs(dx) > 1 or abs(dy) > 1:
+            pen_arr = QPen(QColor(255, 255, 0), 2)
+            arrow = self._scene.addLine(cx_ref, cy_ref, cx_match, cy_match, pen_arr)
+            arrow.setZValue(4)
+            self._overlay_items.append(arrow)
+
+        # Text NCC + dx/dy
+        sign_x = "+" if dx >= 0 else ""
+        sign_y = "+" if dy >= 0 else ""
+        label = f"NCC={score:.2f}  dx={sign_x}{dx:.0f}  dy={sign_y}{dy:.0f}"
+        txt = self._scene.addSimpleText(label)
+        txt.setBrush(QBrush(found_color))
+        txt.setPos(float(match_x), float(match_y) - 18)
+        txt.setZValue(4)
+        self._overlay_items.append(txt)
 
     def _remove_roi_item(self) -> None:
         if self._roi_item is not None:

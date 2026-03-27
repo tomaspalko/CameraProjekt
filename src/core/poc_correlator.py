@@ -217,7 +217,7 @@ def poc_align(
         )
         ncc = _ncc_score(reference.astype(np.float32), aligned)
 
-    except Exception:
+    except (cv2.error, ValueError, FloatingPointError):
         # Degenerate input (uniform / dark image) — return neutral result
         dx, dy, angle_deg, confidence, ncc = 0.0, 0.0, 0.0, 0.0, 0.0
 
