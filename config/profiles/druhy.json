@@ -1,0 +1,39 @@
+{
+  "name": "druhy",
+  "reference_path": "C:/Users/tomas.palko/Desktop/TestPictures/Obrazok1.jpg",
+  "roi": {
+    "x0": 155,
+    "y0": 146,
+    "x1": 275,
+    "y1": 520
+  },
+  "scale_mm_per_px": 1.0,
+  "algorithm": "ECC",
+  "ecc": {
+    "max_iter": 2004,
+    "epsilon": 1e-08,
+    "gauss_filt_size": 3
+  },
+  "auto_clahe": true,
+  "edge_method": "Canny",
+  "canny": {
+    "threshold1": 98,
+    "threshold2": 164,
+    "blur": 9
+  },
+  "scharr": {
+    "threshold": 85,
+    "blur": 9
+  },
+  "log": {
+    "sigma": 2.0000000000000004,
+    "threshold": 42,
+    "blur": 1
+  },
+  "pc": {
+    "nscale": 1,
+    "min_wavelength": 13,
+    "mult": 2.6000000000000005,
+    "k": 2.0
+  }
+}

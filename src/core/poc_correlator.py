@@ -12,6 +12,8 @@ import math
 import cv2
 import numpy as np
 
+from src.core.aligner import _ncc_score
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -89,8 +91,8 @@ def _estimate_rotation(ref: np.ndarray, img: np.ndarray) -> tuple[float, float]:
     # Log-polar output: 512 rows × log-radius columns.
     # Using only the first half-circle (0–180°) because the FFT magnitude
     # spectrum is symmetric (180° periodicity).
-    # half_h = 256 → resolution ≈ 180/256 ≈ 0.70 °/row (before sub-pixel)
-    # Periodic wrap-around in _parabolic_peak handles boundary cases.
+    # half_h = 256 → resolution ≈ 180/256 ≈ 0.70 °/row (before sub-pixel).
+    # INTER_CUBIC gives sharper interpolation than INTER_LINEAR for the warp.
     out_h = 512
     out_w = int(max_radius)
     half_h = out_h // 2
@@ -206,13 +208,23 @@ def poc_align(
         confidence = float(min(rot_conf, trans_conf))
         confidence = float(np.clip(confidence, 0.0, 1.0))
 
+        # NCC score: apply estimated transform to image and compare to reference
+        M_align = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), -angle_deg, 1.0)
+        M_align[0, 2] += dx
+        M_align[1, 2] += dy
+        aligned = cv2.warpAffine(
+            image.astype(np.float32), M_align, (w, h), flags=cv2.INTER_LINEAR
+        )
+        ncc = _ncc_score(reference.astype(np.float32), aligned)
+
     except Exception:
         # Degenerate input (uniform / dark image) — return neutral result
-        dx, dy, angle_deg, confidence = 0.0, 0.0, 0.0, 0.0
+        dx, dy, angle_deg, confidence, ncc = 0.0, 0.0, 0.0, 0.0, 0.0
 
     return {
         "dx_px":     float(dx),
         "dy_px":     float(dy),
         "angle_deg": float(angle_deg),
         "confidence": confidence,
+        "ncc_score": float(ncc),
     }

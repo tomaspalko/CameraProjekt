@@ -1,0 +1,17 @@
+{
+  "name": "Prvy",
+  "reference_path": "C:/Users/tomas.palko/Desktop/TestPictures/Obrazok1.jpg",
+  "roi": {
+    "x0": 163,
+    "y0": 146,
+    "x1": 247,
+    "y1": 435
+  },
+  "scale_mm_per_px": 1.0,
+  "algorithm": "POC",
+  "ecc": {
+    "max_iter": 1000,
+    "epsilon": 1e-08
+  },
+  "auto_clahe": false
+}

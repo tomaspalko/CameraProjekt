@@ -7,3 +7,7 @@ dist/
 build/
 .venv/
 venv/
+models/*.onnx
+debug_output/
+debug_alignment.py
+.claude/

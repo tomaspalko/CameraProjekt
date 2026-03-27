@@ -11,11 +11,11 @@ from PyQt6.QtGui import QAction
 
 from src.config.config_manager import ConfigManager
 from src.config.profile import Profile
-from src.gui.reference_editor import ReferenceEditor
+from src.gui.inspection_panel import InspectionPanel
 from src.gui.batch_panel import BatchPanel
 
 _APP_NAME = "Weld Inspection Vision System"
-_VERSION  = "0.4.0"
+_VERSION  = "0.5.0"
 
 
 class MainWindow(QMainWindow):
@@ -26,7 +26,7 @@ class MainWindow(QMainWindow):
         self._config_mgr = ConfigManager(profiles_dir)
 
         self.setWindowTitle(_APP_NAME)
-        self.resize(1100, 700)
+        self.resize(1400, 800)
 
         self._build_menu()
         self._build_tabs()
@@ -56,11 +56,11 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
 
     def _build_tabs(self) -> None:
-        self._ref_editor = ReferenceEditor(self._config_mgr)
+        self._ref_editor = InspectionPanel(self._config_mgr)
         self._batch_panel = BatchPanel(self._config_mgr)
 
         tabs = QTabWidget()
-        tabs.addTab(self._ref_editor, "Konfigurácia")
+        tabs.addTab(self._ref_editor, "Inšpekcia")
         tabs.addTab(self._batch_panel, "Batch")
         self.setCentralWidget(tabs)
 

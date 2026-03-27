@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import cv2
+import math
 import numpy as np
 from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QColor, QPen, QBrush, QPainter
@@ -35,6 +36,7 @@ class ImageViewer(QWidget):
     """
 
     roi_selected = pyqtSignal(int, int, int, int)
+    image_clicked = pyqtSignal(int, int)   # (x, y) v súradniciach obrazu
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -54,6 +56,7 @@ class ImageViewer(QWidget):
 
         # ROI rubber-band stav
         self._roi_mode = False
+        self._click_mode = False
         self._rb_origin: QPointF | None = None
         self._rubber_band: QRubberBand | None = None
 
@@ -86,6 +89,12 @@ class ImageViewer(QWidget):
             if self._rubber_band:
                 self._rubber_band.hide()
 
+    def set_click_mode(self, enabled: bool) -> None:
+        """Zapne/vypne klikací mód — klik emituje image_clicked(x, y)."""
+        self._click_mode = enabled
+        cursor = Qt.CursorShape.PointingHandCursor if enabled else Qt.CursorShape.ArrowCursor
+        self._view.setCursor(cursor)
+
     def draw_roi(self, roi: ROI) -> None:
         """Vykreslí prerušovaný obdĺžnik ROI."""
         self._remove_roi_item()
@@ -104,41 +113,75 @@ class ImageViewer(QWidget):
         dx_px: float,
         dy_px: float,
         edges: np.ndarray | None = None,
+        edge_color: tuple[int, int, int, int] = (0, 255, 255, 200),
     ) -> None:
         """Vykreslí overlay: Canny hrany + šípka posunutia.
 
         Args:
             dx_px: posun v x [px]
             dy_px: posun v y [px]
-            edges: uint8 grayscale maska hrán (voliteľné)
+            edges: uint8 grayscale maska hrán alebo RGBA array (voliteľné)
+            edge_color: RGBA farba hrán keď edges je grayscale (default: cyanová)
         """
         self.clear_overlay()
 
         if self._pixmap_item is None:
             return
 
-        # Canny hrany — cyanová farba
-        if edges is not None and edges.ndim == 2:
-            h, w = edges.shape
-            edge_color = np.zeros((h, w, 4), dtype=np.uint8)
-            mask = edges > 0
-            edge_color[mask] = [0, 255, 255, 200]  # RGBA cyanová
-            q_img = QImage(
-                edge_color.data, w, h, w * 4, QImage.Format.Format_RGBA8888
-            )
-            px_item = self._scene.addPixmap(QPixmap.fromImage(q_img.copy()))
-            px_item.setZValue(1)
-            self._overlay_items.append(px_item)
+        # Canny hrany — grayscale maska alebo hotové RGBA
+        if edges is not None:
+            if edges.ndim == 3 and edges.shape[2] == 4:
+                # Už predpripravené RGBA — použij tobytes() pre bezpečný prenos do Qt
+                arr = np.ascontiguousarray(edges)
+                h, w = arr.shape[:2]
+                q_img = QImage(
+                    arr.tobytes(), w, h, w * 4, QImage.Format.Format_RGBA8888
+                )
+                px_item = self._scene.addPixmap(QPixmap.fromImage(q_img))
+                px_item.setZValue(1)
+                self._overlay_items.append(px_item)
+            elif edges.ndim == 2:
+                h, w = edges.shape
+                rgba = np.zeros((h, w, 4), dtype=np.uint8)
+                rgba[edges > 0] = edge_color
+                q_img = QImage(
+                    rgba.tobytes(), w, h, w * 4, QImage.Format.Format_RGBA8888
+                )
+                px_item = self._scene.addPixmap(QPixmap.fromImage(q_img))
+                px_item.setZValue(1)
+                self._overlay_items.append(px_item)
 
-        # Šípka posunutia — žltá, zo stredu obrazu
+        # Šípka posunutia — žltá, zo stredu obrazu (dĺžka capovaná na 40 % min. rozmeru)
         if self._pixmap_item is not None:
             br = self._pixmap_item.boundingRect()
             cx, cy = br.width() / 2, br.height() / 2
+            max_arrow = min(br.width(), br.height()) * 0.4
+            scale = 5.0
+            dx_draw = dx_px * scale
+            dy_draw = dy_px * scale
+            mag = math.hypot(dx_draw, dy_draw)
+            if mag > max_arrow and mag > 0:
+                factor = max_arrow / mag
+                dx_draw *= factor
+                dy_draw *= factor
             pen_arrow = QPen(QColor(255, 255, 0))
             pen_arrow.setWidth(3)
-            line = self._scene.addLine(cx, cy, cx + dx_px * 5, cy + dy_px * 5, pen_arrow)
+            line = self._scene.addLine(cx, cy, cx + dx_draw, cy + dy_draw, pen_arrow)
             line.setZValue(2)
             self._overlay_items.append(line)
+
+    def draw_edges(self, edges: np.ndarray) -> None:
+        """Overlay Canny edge mask (cyan) — without displacement arrow."""
+        self.clear_overlay()
+        if self._pixmap_item is None or edges is None:
+            return
+        h, w = edges.shape
+        edge_color = np.zeros((h, w, 4), dtype=np.uint8)
+        edge_color[edges > 0] = [0, 255, 255, 200]
+        q_img = QImage(edge_color.tobytes(), w, h, w * 4, QImage.Format.Format_RGBA8888)
+        px_item = self._scene.addPixmap(QPixmap.fromImage(q_img))
+        px_item.setZValue(1)
+        self._overlay_items.append(px_item)
 
     def clear_overlay(self) -> None:
         """Odstráni všetky overlay vrstvy (hrany, šípky)."""
@@ -200,6 +243,17 @@ class ImageViewer(QWidget):
                 self._rb_origin = None
                 if x1 > x0 and y1 > y0:
                     self.roi_selected.emit(x0, y0, x1, y1)
+                return True
+
+        elif source is self._view.viewport() and self._click_mode:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                vp = event.position()
+                sp = self._view.mapToScene(int(vp.x()), int(vp.y()))
+                x, y = int(sp.x()), int(sp.y())
+                if self._pixmap_item is not None:
+                    br = self._pixmap_item.boundingRect()
+                    if 0 <= x < int(br.width()) and 0 <= y < int(br.height()):
+                        self.image_clicked.emit(x, y)
                 return True
 
         return super().eventFilter(source, event)

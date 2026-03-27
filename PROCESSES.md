@@ -14,8 +14,9 @@
 | 3 | Batch | ✅ Hotová | phase-2 |
 | 4 | GUI | ✅ Hotová | phase-2 |
 | 5 | Testy & kalibrácia (POC) | ✅ Hotová | phase-2 |
+| 6 | Vylepšenia (web research) | ✅ Hotová | phase-2 |
 
-**Testov:** 124 (108 unit + 16 integration) — všetky zelené.
+**Testov:** 128 (112 unit + 16 integration) — všetky zelené.
 
 ---
 
@@ -140,6 +141,23 @@ ROTATION_TOL_DEG   = 0.05   # max chyba uhol [°]
 MM_CONVERSION_TOL  = 1e-5   # relatívna chyba px→mm
 MIN_CONFIDENCE     = 0.60   # minimálna ECC spoľahlivosť
 ```
+
+---
+
+### Fáza 6 — Vylepšenia (na základe web research 2024–2025)
+
+Empiricky testované na syntetických dátach; výsledky:
+
+| Zmena | Výsledok |
+|---|---|
+| INTER_CUBIC pre derotáciu (P1-C) | Mierne horšie — INTER_LINEAR zostáva |
+| Vyššie log-polar rozlíšenie (P1-B) | Spôsobuje boundary issues — zamietnuté |
+| Gaussian log-domain peak fit (P1-A) | Horšie pre Hann POC — zamietnuté |
+| ECC two-pass gaussFiltSize=1 (P1-E) | Diverguje pre kombinovaný pohyb — `two_pass=False` default |
+| Adaptívny CLAHE `auto_clahe` (P2-B) | ✅ Pridané do `preprocess()` a `Profile` |
+| NCC confidence skóre (P2-C) | ✅ Pridané ako `ncc_score` do všetkých výsledkov |
+
+**Záver:** ECC presnosť je systematicky limitovaná na ~0.059 px pre testovacie dáta (256×256 syntetické). Nie je to kódový problém — ďalšie zlepšenie vyžaduje reálne obrazy alebo DL prístup.
 
 ---
 

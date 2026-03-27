@@ -81,3 +81,24 @@ def test_various_clahe_clips(gray_image, clahe_clip):
 def test_various_blur_kernels(gray_image, blur_kernel):
     result = preprocess(gray_image, blur_kernel=blur_kernel)
     assert result.shape == gray_image.shape
+
+
+# ── auto_clahe ───────────────────────────────────────────────────────────────
+
+def test_auto_clahe_output_shape(gray_image):
+    result = preprocess(gray_image, auto_clahe=True)
+    assert result.shape == gray_image.shape
+
+def test_auto_clahe_output_dtype(gray_image):
+    result = preprocess(gray_image, auto_clahe=True)
+    assert result.dtype == np.uint8
+
+def test_auto_clahe_does_not_crash_black():
+    black = np.zeros((256, 256), dtype=np.uint8)
+    result = preprocess(black, auto_clahe=True)
+    assert result is not None
+
+def test_auto_clahe_does_not_crash_white():
+    white = np.full((256, 256), 255, dtype=np.uint8)
+    result = preprocess(white, auto_clahe=True)
+    assert result is not None
