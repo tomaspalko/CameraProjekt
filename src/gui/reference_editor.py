@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import cv2
 import numpy as np
 from pathlib import Path
@@ -432,10 +433,33 @@ class ReferenceEditor(QWidget):
         rgba[projected > 0] = [0, 255, 80, 220]   # zelená
         projected_rgba = np.ascontiguousarray(rgba)
 
+        # Ťažisko referenčného objektu — z edge masky (nie z grayscale intenzity).
+        # Voliteľné maskovaním ROI. Konvencia: getRotationMatrix2D (CCW kladný uhol).
+        edges_for_centroid = edges_ref.copy()
+        if self._roi is not None:
+            roi_mask = self._roi.create_mask(edges_for_centroid.shape[:2])
+            edges_for_centroid = cv2.bitwise_and(
+                edges_for_centroid, edges_for_centroid, mask=roi_mask
+            )
+        mom = cv2.moments(edges_for_centroid)
+        if mom["m00"] > 0:
+            cx_ref = mom["m10"] / mom["m00"]
+            cy_ref = mom["m01"] / mom["m00"]
+        else:
+            cx_ref, cy_ref = cx, cy  # fallback: stred obrazu
+
+        # Projekcia ťažiska do inšpekčného obrazu (getRotationMatrix2D konvencia).
+        angle_rad = math.radians(result.angle_deg)
+        cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+        rx, ry = cx_ref - cx, cy_ref - cy
+        cx_insp = cos_a * rx + sin_a * ry + cx + result.dx_px
+        cy_insp = -sin_a * rx + cos_a * ry + cy + result.dy_px
+
         self._viewer.set_image(self._test_image)
         if self._roi is not None:
             self._viewer.draw_roi(self._roi)
         self._viewer.draw_overlay(result.dx_px, result.dy_px, projected_rgba)
+        self._viewer.draw_centroid_displacement(cx_ref, cy_ref, cx_insp, cy_insp)
 
     def _refresh_profile_list(self) -> None:
         names = self._config_mgr.list_profiles()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import cv2
 import math
 import numpy as np
+from scipy.ndimage import binary_fill_holes
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, pyqtSlot
@@ -1001,8 +1002,19 @@ class InspectionPanel(QWidget):
         self._insp_viewer.draw_overlay(result.dx_px, result.dy_px, projected_rgba)
 
         # ── Ťažisko segmentu: výpočet posunutia a overlay ──
-        if self._segment_centroid_ref is not None:
-            cx_seg, cy_seg = self._segment_centroid_ref
+        # Ak nie je manuálne vybraný segment, vypočítaj tažisko automaticky z ref. obrazu
+        centroid_ref = self._segment_centroid_ref
+        if centroid_ref is None and self._ref_edges is not None:
+            edges_src = self._ref_edges.copy()
+            if self._roi is not None:
+                roi_mask = self._roi.create_mask(edges_src.shape[:2])
+                edges_src = cv2.bitwise_and(edges_src, edges_src, mask=roi_mask)
+            mom = cv2.moments(edges_src)
+            if mom["m00"] > 0:
+                centroid_ref = (mom["m10"] / mom["m00"], mom["m01"] / mom["m00"])
+
+        if centroid_ref is not None:
+            cx_seg, cy_seg = centroid_ref
             h_r, w_r = self._ref_image.shape[:2]
             cx_img, cy_img = w_r / 2.0, h_r / 2.0
             θ = math.radians(result.angle_deg)
@@ -1278,9 +1290,12 @@ class InspectionPanel(QWidget):
         if self._select_seg_btn.isChecked():
             # SELECT MODE: vyber segment pre template matching
             self._selected_label = label
-            # Výpočet ťažiska vybraného segmentu pomocou momentov obrazu
+            # Výpočet ťažiska vybraného segmentu pomocou momentov obrazu.
+            # Uzavretá kontúra sa vyplní (binary_fill_holes) aby centroid
+            # zodpovedal geometrickému stredu plochy, nie len pixelov hrán.
             seg_mask = (self._segment_labels == label).astype(np.uint8) * 255
-            M_mom = cv2.moments(seg_mask)
+            filled = binary_fill_holes(seg_mask > 0).astype(np.uint8) * 255
+            M_mom = cv2.moments(filled)
             if M_mom["m00"] > 0:
                 self._segment_centroid_ref = (
                     M_mom["m10"] / M_mom["m00"],
