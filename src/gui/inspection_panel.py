@@ -86,6 +86,7 @@ class InspectionPanel(QWidget):
         self._undo_stack: list[tuple[frozenset[int], np.ndarray | None]] = []
         self._selected_label: int | None = None          # vybraný segment pre template matching
         self._segment_centroid_ref: tuple[float, float] | None = None  # ťažisko segmentu v ref. obraze
+        self._pending_reselect_centroid: tuple[float, float] | None = None  # obnovenie po načítaní profilu
 
         self._build_ui()
         self._connect_signals()
@@ -127,6 +128,9 @@ class InspectionPanel(QWidget):
             dexined_weights=self._dexined_weights_edit.text().strip(),
             dexined_threshold=self._dexined_thresh_spin.value(),
             dexined_device=self._dexined_device_combo.currentText(),
+            insp_roi=self._insp_roi,
+            min_seg_len=self._min_seg_len_spin.value(),
+            selected_segment_centroid=self._edge_pixel_centroid(self._selected_label),
         )
 
     def set_profile(self, profile: Profile) -> None:
@@ -191,6 +195,18 @@ class InspectionPanel(QWidget):
             self._dexined_device_combo.setCurrentIndex(dev_idx)
 
         self._roi = profile.roi
+        self._min_seg_len_spin.setValue(profile.min_seg_len)
+        self._insp_roi = profile.insp_roi
+        if self._insp_roi is not None:
+            self._insp_viewer.draw_roi(self._insp_roi)
+            self._update_insp_roi_spinboxes()
+        else:
+            self._insp_viewer.clear_roi()
+            for _sp in (self._insp_roi_x0, self._insp_roi_y0, self._insp_roi_x1, self._insp_roi_y1):
+                _sp.blockSignals(True)
+                _sp.setValue(0)
+                _sp.blockSignals(False)
+        self._pending_reselect_centroid = profile.selected_segment_centroid
         if ref_path and Path(ref_path).exists():
             self._load_ref_from_path(ref_path)
         elif self._ref_image is not None:
@@ -254,6 +270,11 @@ class InspectionPanel(QWidget):
         self._run_btn = QPushButton("Spustiť zarovnanie")
         self._run_btn.setMinimumHeight(36)
         right_layout.addWidget(self._run_btn)
+
+        self._align_mode_label = QLabel("")
+        self._align_mode_label.setStyleSheet("color: #ffaa44; font-size: 10px;")
+        self._align_mode_label.setWordWrap(True)
+        right_layout.addWidget(self._align_mode_label)
 
         right_layout.addWidget(self._build_result_group())
         right_layout.addStretch()
@@ -914,6 +935,49 @@ class InspectionPanel(QWidget):
         if self._roi is not None and self._roi.is_valid(ref_pre.shape[:2]):
             mask = self._roi.create_mask(ref_pre.shape[:2])
 
+        # ── Segmentová maska: ak je vybraný/definovaný jeden segment,
+        #    zarovnanie pracuje iba s jeho regiónom (nie celým obrazom). ──
+        _seg_align_label: int | None = None
+        _auto_centroid: tuple[float, float] | None = None
+
+        active = self._active_ref_edges
+        if self._selected_label is not None:
+            # Prípad 1: používateľ explicitne vybral segment
+            _seg_align_label = self._selected_label
+        elif active is not None and self._segment_labels is not None:
+            # Prípad 2: auto-detekcia — ak ostáva iba jeden aktívny komponent
+            active_labels = {
+                int(v) for v in np.unique(self._segment_labels[active > 0]) if v != 0
+            }
+            if len(active_labels) == 1:
+                _seg_align_label = next(iter(active_labels))
+                seg_filled = binary_fill_holes(
+                    (self._segment_labels == _seg_align_label) > 0
+                ).astype(np.uint8) * 255
+                _mom = cv2.moments(seg_filled)
+                if _mom["m00"] > 0:
+                    _auto_centroid = (
+                        _mom["m10"] / _mom["m00"],
+                        _mom["m01"] / _mom["m00"],
+                    )
+
+        if _seg_align_label is not None and self._segment_labels is not None:
+            roi_mask_for_seg = (
+                self._roi.create_mask(ref_pre.shape[:2])
+                if self._roi is not None and self._roi.is_valid(ref_pre.shape[:2])
+                else None
+            )
+            mask = self._build_segment_align_mask(
+                _seg_align_label, ref_pre.shape[:2], roi_mask_for_seg
+            )
+            self._align_mode_label.setText(
+                f"Zarovnanie: segment #{_seg_align_label}"
+                + (" (auto)" if self._selected_label is None else "")
+            )
+        else:
+            self._align_mode_label.setText("")
+        # ── Koniec segmentovej masky ──────────────────────────────────────
+
         try:
             raw = align(
                 ref_pre, insp_pre,
@@ -948,7 +1012,7 @@ class InspectionPanel(QWidget):
                 lbl.setStyleSheet("color: #ff6666;")
             self._res_conf.setStyleSheet("color: #ff6666; font-weight: bold;")
             self._res_ncc.setStyleSheet("color: #ff6666;")
-            self._insp_viewer.set_image(insp_work)
+            self._insp_viewer.set_image(insp_work, reset_zoom=False)
             return
 
         # Resetuj farbu výsledkových labelov
@@ -1002,8 +1066,10 @@ class InspectionPanel(QWidget):
         self._insp_viewer.draw_overlay(result.dx_px, result.dy_px, projected_rgba)
 
         # ── Ťažisko segmentu: výpočet posunutia a overlay ──
-        # Ak nie je manuálne vybraný segment, vypočítaj tažisko automaticky z ref. obrazu
+        # Priorita: explicitný výber → auto-detekovaný segment → fallback (všetky hrany)
         centroid_ref = self._segment_centroid_ref
+        if centroid_ref is None and _auto_centroid is not None:
+            centroid_ref = _auto_centroid
         if centroid_ref is None and self._ref_edges is not None:
             edges_src = self._ref_edges.copy()
             if self._roi is not None:
@@ -1135,6 +1201,7 @@ class InspectionPanel(QWidget):
         self._segment_labels = self._compute_segment_labels(edges_full)
         self._update_seg_ui()
         self._ref_viewer.draw_edges(edges_full)
+        self._try_restore_selected_segment()
 
     def _update_roi_spinboxes(self) -> None:
         if self._roi is None:
@@ -1211,6 +1278,7 @@ class InspectionPanel(QWidget):
         self._segment_labels = self._compute_segment_labels(edges)
         self._update_seg_ui()
         self._ref_viewer.draw_edges(edges)
+        self._try_restore_selected_segment()
         self._dexined_status_label.setText("Hrany vypočítané ✓")
         self._dexined_status_label.setStyleSheet("color: #44ff88; font-size: 10px;")
 
@@ -1241,6 +1309,28 @@ class InspectionPanel(QWidget):
         """Vráti int32 label mapu prepojených komponentov hrán."""
         _, labels = cv2.connectedComponents(edges, connectivity=8)
         return labels
+
+    def _build_segment_align_mask(
+        self,
+        label: int,
+        image_shape: tuple[int, int],
+        roi_mask: np.ndarray | None,
+        dilation_px: int = 21,
+    ) -> np.ndarray:
+        """Vytvorí dilat. masku segmentu pre ECC/POC zarovnanie.
+
+        Pixely segmentu sú rozšírené o *dilation_px* aby ECC mal dosť
+        textúry okolo hrán. Výsledok je AND-ovaný s roi_mask ak je zadaná.
+        """
+        h, w = image_shape
+        seg_bin = (self._segment_labels == label).astype(np.uint8) * 255
+        seg_bin = seg_bin[:h, :w]
+        k = dilation_px | 1  # zaručiť nepárne číslo
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        seg_dilated = cv2.dilate(seg_bin, kernel)
+        if roi_mask is not None:
+            seg_dilated = cv2.bitwise_and(seg_dilated, roi_mask[:h, :w])
+        return seg_dilated
 
     def _update_seg_ui(self) -> None:
         n_comp = len(self._removed_labels)
@@ -1621,3 +1711,46 @@ class InspectionPanel(QWidget):
             spin.blockSignals(True)
             spin.setValue(val)
             spin.blockSignals(False)
+
+    def _edge_pixel_centroid(self, label: int | None) -> tuple | None:
+        """Vráti (cx, cy) ako priemer edge pixelov segmentu — konzistentné s _try_restore_selected_segment."""
+        if label is None or self._segment_labels is None:
+            return None
+        pts = np.where(self._segment_labels == label)
+        if len(pts[0]) == 0:
+            return None
+        return (float(np.mean(pts[1])), float(np.mean(pts[0])))
+
+    def _try_restore_selected_segment(self) -> None:
+        """Ak profil obsahoval ťažisko segmentu, nájde najbližší segment a vyberie ho."""
+        if self._pending_reselect_centroid is None or self._segment_labels is None:
+            return
+        cx_target, cy_target = self._pending_reselect_centroid
+        best_label: int | None = None
+        best_dist = float("inf")
+        for lbl in np.unique(self._segment_labels):
+            if lbl == 0:
+                continue
+            pts = np.where(self._segment_labels == lbl)
+            if len(pts[0]) == 0:
+                continue
+            cx = float(np.mean(pts[1]))
+            cy = float(np.mean(pts[0]))
+            dist = math.hypot(cx - cx_target, cy - cy_target)
+            if dist < best_dist:
+                best_dist, best_label = dist, int(lbl)
+        self._pending_reselect_centroid = None
+        if best_label is None or best_dist >= 50.0:
+            return
+        self._selected_label = best_label
+        seg_mask = (self._segment_labels == best_label).astype(np.uint8) * 255
+        filled = binary_fill_holes(seg_mask > 0).astype(np.uint8) * 255
+        M = cv2.moments(filled)
+        if M["m00"] > 0:
+            self._segment_centroid_ref = (M["m10"] / M["m00"], M["m01"] / M["m00"])
+        self._update_seg_info()
+        self._ref_viewer.draw_edges_with_selection(
+            self._active_ref_edges, self._segment_labels, best_label
+        )
+        if self._segment_centroid_ref is not None:
+            self._ref_viewer.draw_centroid_marker(*self._segment_centroid_ref)

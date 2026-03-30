@@ -87,6 +87,9 @@ def test_from_dict_round_trip():
         algorithm="ECC",
         ecc_max_iter=3000,
         ecc_epsilon=1e-9,
+        insp_roi=ROI(10, 20, 110, 120),
+        min_seg_len=15,
+        selected_segment_centroid=(123.4, 56.7),
     )
     restored = Profile.from_dict(p.to_dict())
     assert restored == p
@@ -97,11 +100,26 @@ def test_from_dict_defaults():
     assert p.algorithm == "ECC"
     assert p.roi is None
     assert p.ecc_max_iter == 2000
+    assert p.insp_roi is None
+    assert p.min_seg_len == 0
+    assert p.selected_segment_centroid is None
 
 def test_from_dict_with_roi():
     d = {"name": "x", "roi": {"x0": 5, "y0": 6, "x1": 50, "y1": 60}}
     p = Profile.from_dict(d)
     assert p.roi == ROI(5, 6, 50, 60)
+
+def test_from_dict_with_insp_roi_and_segment():
+    d = {
+        "name": "x",
+        "insp_roi": {"x0": 10, "y0": 20, "x1": 110, "y1": 120},
+        "min_seg_len": 25,
+        "selected_segment_centroid": [64.5, 32.1],
+    }
+    p = Profile.from_dict(d)
+    assert p.insp_roi == ROI(10, 20, 110, 120)
+    assert p.min_seg_len == 25
+    assert p.selected_segment_centroid == (64.5, 32.1)
 
 def test_from_dict_without_roi():
     p = Profile.from_dict({"name": "x", "roi": None})

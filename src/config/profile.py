@@ -61,6 +61,11 @@ class Profile:
     dexined_threshold: float = 0.5  # sigmoid threshold (0–1)
     dexined_device: str = "cpu"     # "cpu" or "cuda"
 
+    # ---- inspection / segment state ----
+    insp_roi: Optional[ROI] = None                              # ROI pre inšpekčný obraz
+    min_seg_len: int = 0                                        # min. dĺžka segmentu [px]
+    selected_segment_centroid: Optional[tuple] = None           # (cx, cy) ťažiska vybraného segmentu
+
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
@@ -134,12 +139,20 @@ class Profile:
                 "threshold": self.dexined_threshold,
                 "device": self.dexined_device,
             },
+            "insp_roi": self.insp_roi.to_dict() if self.insp_roi is not None else None,
+            "min_seg_len": self.min_seg_len,
+            "selected_segment_centroid": list(self.selected_segment_centroid)
+                if self.selected_segment_centroid is not None else None,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Profile":
         roi_data = d.get("roi")
         roi = ROI.from_dict(roi_data) if roi_data is not None else None
+        insp_roi_data = d.get("insp_roi")
+        insp_roi = ROI.from_dict(insp_roi_data) if insp_roi_data is not None else None
+        sc = d.get("selected_segment_centroid")
+        selected_segment_centroid = (float(sc[0]), float(sc[1])) if sc is not None else None
         ecc      = d.get("ecc", {})
         canny    = d.get("canny", {})
         scharr   = d.get("scharr", {})
@@ -172,4 +185,7 @@ class Profile:
             dexined_weights=str(dexined.get("weights", "")),
             dexined_threshold=float(dexined.get("threshold", 0.5)),
             dexined_device=str(dexined.get("device", "cpu")),
+            insp_roi=insp_roi,
+            min_seg_len=int(d.get("min_seg_len", 0)),
+            selected_segment_centroid=selected_segment_centroid,
         )
