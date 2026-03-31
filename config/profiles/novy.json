@@ -1,11 +1,11 @@
 {
-  "name": "unnamed",
+  "name": "novy",
   "reference_path": "C:/Users/tomas.palko/Desktop/TestPictures/15.jpg",
   "roi": {
-    "x0": 685,
-    "y0": 53,
-    "x1": 1364,
-    "y1": 356
+    "x0": 701,
+    "y0": 54,
+    "x1": 1316,
+    "y1": 412
   },
   "scale_mm_per_px": 1.0,
   "algorithm": "ECC",
@@ -15,11 +15,11 @@
     "gauss_filt_size": 7
   },
   "auto_clahe": true,
-  "edge_method": "Canny",
+  "edge_method": "DexiNed",
   "canny": {
-    "threshold1": 45,
-    "threshold2": 158,
-    "blur": 9
+    "threshold1": 50,
+    "threshold2": 150,
+    "blur": 3
   },
   "scharr": {
     "threshold": 30,
@@ -41,10 +41,15 @@
     "threshold": 0.5,
     "device": "cpu"
   },
-  "insp_roi": null,
+  "insp_roi": {
+    "x0": 526,
+    "y0": 24,
+    "x1": 1531,
+    "y1": 579
+  },
   "min_seg_len": 200,
   "selected_segment_centroid": [
-    1009.161094224924,
-    169.9164133738602
+    1120.3834822506642,
+    151.72397971504466
   ]
 }

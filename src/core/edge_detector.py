@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+import threading
+
 import cv2
 import numpy as np
 from scipy import ndimage
@@ -23,6 +25,7 @@ METHODS: list[str] = ["Canny", "Scharr", "LoG", "PhaseCongruency", "DexiNed"]
 
 # Module-level cache for loaded DexiNed model (lazy-loaded once per session)
 _dexined_cache: dict = {}          # {"model": ..., "path": ..., "device": ...}
+_dexined_lock = threading.Lock()   # cv2.dnn.Net is not thread-safe
 
 # Default weights path (project-relative)
 DEXINED_DEFAULT_WEIGHTS = str(
@@ -308,10 +311,10 @@ def detect_dexined(
 
     # Create blob: HWC → NCHW
     blob = cv2.dnn.blobFromImage(bgr, scalefactor=1.0, swapRB=False)
-    net.setInput(blob)
-
-    # Forward pass — output shape (1, 1, H_pad, W_pad)
-    out = net.forward()
+    with _dexined_lock:
+        net.setInput(blob)
+        # Forward pass — output shape (1, 1, H_pad, W_pad)
+        out = net.forward()
     fused = out[0, 0, :h_orig, :w_orig]   # remove padding, squeeze batch+channel
 
     # Sigmoid + threshold

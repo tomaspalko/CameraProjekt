@@ -1,5 +1,6 @@
 {
-  "name": "unnamed",
+  "id": 1,
+  "name": "Profil1",
   "reference_path": "C:/Users/tomas.palko/Desktop/TestPictures/15.jpg",
   "roi": {
     "x0": 685,
@@ -17,9 +18,9 @@
   "auto_clahe": true,
   "edge_method": "Canny",
   "canny": {
-    "threshold1": 45,
-    "threshold2": 158,
-    "blur": 9
+    "threshold1": 148,
+    "threshold2": 27,
+    "blur": 3
   },
   "scharr": {
     "threshold": 30,
@@ -42,9 +43,9 @@
     "device": "cpu"
   },
   "insp_roi": null,
-  "min_seg_len": 200,
+  "min_seg_len": 0,
   "selected_segment_centroid": [
-    1009.161094224924,
-    169.9164133738602
+    1021.9507959479016,
+    169.86685962373372
   ]
 }

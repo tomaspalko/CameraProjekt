@@ -12,7 +12,7 @@
 | Motion range | Small translation, rotation ~1° |
 | Lighting | Controlled, stable |
 | Output | dx, dy, angle (°), confidence |
-| Mode | Batch (stored images) |
+| Mode | Single image inspection |
 | UI | Desktop GUI (PyQt6) |
 
 ---
@@ -40,9 +40,7 @@ weld_vision/
 │   ├── default_config.yaml
 │   └── profiles/*.json         # configuration profiles
 ├── data/
-│   ├── reference/              # reference images
-│   └── batch/                  # images to process
-├── results/                    # CSV / JSON outputs
+│   └── reference/              # reference images
 ├── src/
 │   ├── core/
 │   │   ├── preprocessor.py     # CLAHE, blur, grayscale
@@ -52,12 +50,9 @@ weld_vision/
 │   │   └── result.py           # Result dataclass + export
 │   ├── config/
 │   │   └── config_manager.py   # YAML/JSON profiles
-│   ├── batch/
-│   │   └── batch_processor.py
 │   └── gui/
 │       ├── main_window.py
-│       ├── reference_editor.py # ROI + scale + preview
-│       ├── batch_panel.py
+│       ├── inspection_panel.py # ROI + scale + preview + test alignment
 │       └── image_viewer.py     # overlay visualisation
 ├── tests/
 │   ├── conftest.py             # shared fixtures, single source of tolerances
@@ -65,7 +60,7 @@ weld_vision/
 │   │   ├── test_preprocessor.py
 │   │   └── test_aligner.py
 │   ├── integration/
-│   │   └── test_pipeline.py    # end-to-end + batch + profile round-trip
+│   │   └── test_pipeline.py    # end-to-end + profile round-trip
 │   └── synthetic/
 │       └── generator.py        # synthetic test pair generator
 ├── pytest.ini
@@ -81,9 +76,8 @@ weld_vision/
 |---|---|---|
 | **1 — Core Engine** | preprocessor, aligner (ECC only), calibration, result + unit tests | Pipeline returns result, accuracy < 0.1 px on synthetic data |
 | **2 — Configuration** | config_manager, ROI editor, profiles, algorithm switching | Profile save/load works, live preview functional |
-| **3 — Batch** | batch_processor, CSV/JSON export, error handling, statistics | 20-image batch runs without crash, correct CSV output |
-| **4 — GUI** | PyQt6: main_window, reference_editor, batch_panel, overlay | Full workflow operable via GUI |
-| **5 — Tests & calibration** | accuracy benchmarks, ECC tuning, documentation | RMS error < 0.05 px, angle < 0.02° |
+| **3 — GUI** | PyQt6: main_window, inspection_panel, overlay | Full workflow operable via GUI |
+| **4 — Tests & calibration** | accuracy benchmarks, ECC tuning, documentation | RMS error < 0.05 px, angle < 0.02° |
 
 **Implementation order within each phase:** `synthetic/generator.py` → `src/core/` → unit tests → integration → GUI
 
@@ -111,7 +105,7 @@ Change these in `conftest.py` only — all tests pick them up automatically.
 
 **Layer 2 — Accuracy tests** (`test_aligner.py`): 8 parametrised cases with known ground truth (pure translation, pure rotation, combined, sub-pixel only, negative values). Also an RMS test that aggregates error across all cases.
 
-**Layer 3 — Integration tests** (`tests/integration/`): full pipeline with MM conversion, batch of 20 images, corrupt image handling, CSV/JSON export, profile save/load round-trip.
+**Layer 3 — Integration tests** (`tests/integration/`): full pipeline with MM conversion, profile save/load round-trip.
 
 ### Test cases for aligner
 
@@ -144,7 +138,7 @@ python watch_tests.py --once    # single run, non-zero exit on failure (CI)
 - **ECC initialise from identity** — for ~1° rotation this is sufficient and avoids the complexity of a coarse step
 - **ECC known bug for small angles** — OpenCV computes angle update via `acos` which has rounding error near 0°; patch: use `asin(mapPtr[3])` instead for better precision at small rotations
 - **Pyramid levels = 1** — small motion does not benefit from multi-scale; single level gives better accuracy
-- **max_iterations = 1000–5000, epsilon = 1e-8** — aggressive settings are feasible since batch speed is not critical
+- **max_iterations = 1000–5000, epsilon = 1e-8** — aggressive settings are feasible since processing speed is not critical
 - **Confidence score** = return value of `findTransformECC`; OK threshold: > 0.7
 - dx positive = right, dy positive = down (OpenCV convention)
 

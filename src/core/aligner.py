@@ -1,5 +1,6 @@
 """ECC-based sub-pixel image registration (Euclidean motion model)."""
 import math
+import time
 
 import cv2
 import numpy as np
@@ -53,9 +54,12 @@ def align(
             angle_deg – rotation in degrees
             confidence – ECC correlation value in [0, 1]
     """
+    t0 = time.perf_counter()
     if algorithm == "POC":
         from src.core.poc_correlator import poc_align
-        return poc_align(reference, image, mask=mask)
+        result = poc_align(reference, image, mask=mask)
+        result["elapsed_s"] = time.perf_counter() - t0
+        return result
     if algorithm != "ECC":
         raise ValueError(f"Unknown algorithm '{algorithm}'. Expected 'ECC' or 'POC'.")
 
@@ -147,4 +151,5 @@ def align(
         "angle_deg": angle_deg,
         "confidence": float(ecc_value),
         "ncc_score": float(ncc),
+        "elapsed_s": time.perf_counter() - t0,
     }

@@ -13,6 +13,7 @@ class Profile:
 
     Attributes:
         name:             Unique profile name (used as filename).
+        id:               Auto-increment numeric ID (0 = not yet assigned).
         reference_path:   Path to the reference image file.
         roi:              Optional rectangle ROI; None means full image.
         scale_mm_per_px:  Physical scale factor for mm conversion.
@@ -24,6 +25,7 @@ class Profile:
     """
 
     name: str
+    id: int = 0
     reference_path: str = ""
     roi: Optional[ROI] = None
     scale_mm_per_px: float = 1.0
@@ -102,6 +104,7 @@ class Profile:
 
     def to_dict(self) -> dict:
         return {
+            "id": self.id,
             "name": self.name,
             "reference_path": self.reference_path,
             "roi": self.roi.to_dict() if self.roi is not None else None,
@@ -161,6 +164,7 @@ class Profile:
         dexined  = d.get("dexined", {})
         return cls(
             name=d["name"],
+            id=int(d.get("id", 0)),
             reference_path=d.get("reference_path", ""),
             roi=roi,
             scale_mm_per_px=float(d.get("scale_mm_per_px", 1.0)),

@@ -24,6 +24,7 @@ class ViewerMode(IntEnum):
     ROI          = 1   # rubber-band → emituje roi_selected
     CLICK        = 2   # single klik → emituje image_clicked
     SEGMENT_AREA = 3   # rubber-band → emituje segment_area_selected
+    CALIBRATION  = 4   # 2 kliky → emituje calibration_points_selected
 
 
 def _numpy_to_pixmap(img: np.ndarray) -> QPixmap:
@@ -48,6 +49,8 @@ class ImageViewer(QWidget):
     roi_selected = pyqtSignal(int, int, int, int)
     image_clicked = pyqtSignal(int, int)            # (x, y) v súradniciach obrazu
     segment_area_selected = pyqtSignal(int, int, int, int)  # (x0, y0, x1, y1) pre výber segmentov
+    calibration_points_selected = pyqtSignal(float, float, float, float)  # (x1, y1, x2, y2)
+    calibration_ready = pyqtSignal()  # oba body umiestnené — čaká na potvrdenie
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -56,6 +59,7 @@ class ImageViewer(QWidget):
         self._view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self._view.setDragMode(QGraphicsView.DragMode.NoDrag)
         self._view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._view.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -69,6 +73,15 @@ class ImageViewer(QWidget):
         self._mode: ViewerMode = ViewerMode.NONE
         self._rb_origin: QPointF | None = None
         self._rubber_band: QRubberBand | None = None
+        self._user_zoomed: bool = False
+
+        # Kalibrácia — dva body
+        self._cal_point1: tuple[float, float] | None = None
+        self._cal_point2: tuple[float, float] | None = None
+        self._cal_p1_items: list = []
+        self._cal_p2_items: list = []
+        self._cal_line_item = None
+        self._cal_dragging: int | None = None
 
         self._view.viewport().installEventFilter(self)
 
@@ -76,8 +89,15 @@ class ImageViewer(QWidget):
     # Verejné metódy
     # ------------------------------------------------------------------
 
-    def set_image(self, img: np.ndarray) -> None:
-        """Zobrazí numpy obraz (BGR alebo grayscale)."""
+    def set_image(self, img: np.ndarray, reset_zoom: bool = True) -> None:
+        """Zobrazí numpy obraz (BGR alebo grayscale).
+
+        Args:
+            reset_zoom: Ak True (default), resetuje zoom na fit. Použiť False
+                        pri re-zobrazení toho istého obrazu pred kreslením overlay.
+        """
+        if reset_zoom:
+            self._user_zoomed = False
         self._scene.clear()
         self._pixmap_item = None
         self._roi_item = None
@@ -96,6 +116,17 @@ class ImageViewer(QWidget):
             self._view.setCursor(Qt.CursorShape.CrossCursor)
         elif mode == ViewerMode.CLICK:
             self._view.setCursor(Qt.CursorShape.PointingHandCursor)
+        elif mode == ViewerMode.CALIBRATION:
+            self._view.setCursor(Qt.CursorShape.CrossCursor)
+            self._cal_point1 = self._cal_point2 = None
+            self._cal_dragging = None
+            for item in self._cal_p1_items + self._cal_p2_items:
+                self._scene.removeItem(item)
+            self._cal_p1_items = []
+            self._cal_p2_items = []
+            if self._cal_line_item:
+                self._scene.removeItem(self._cal_line_item)
+                self._cal_line_item = None
         else:
             self._view.setCursor(Qt.CursorShape.ArrowCursor)
             if self._rubber_band:
@@ -291,8 +322,8 @@ class ImageViewer(QWidget):
         self._overlay_items = []
 
     def fit_in_view(self) -> None:
-        """Prispôsobí zoom tak, aby bol celý obraz viditeľný."""
-        if self._pixmap_item is not None:
+        """Prispôsobí zoom tak, aby bol celý obraz viditeľný (len ak user nezoomoval)."""
+        if self._pixmap_item is not None and not self._user_zoomed:
             self._view.fitInView(self._pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
 
     # ------------------------------------------------------------------
@@ -361,6 +392,51 @@ class ImageViewer(QWidget):
                     if 0 <= x < int(br.width()) and 0 <= y < int(br.height()):
                         self.image_clicked.emit(x, y)
                 return True
+
+        elif self._mode == ViewerMode.CALIBRATION:
+            _GRAB = 15.0
+            if event.type() == QEvent.Type.MouseButtonPress:
+                sp = self._view.mapToScene(int(event.position().x()), int(event.position().y()))
+                sx, sy = sp.x(), sp.y()
+                if self._cal_point1 and math.hypot(sx - self._cal_point1[0], sy - self._cal_point1[1]) < _GRAB:
+                    self._cal_dragging = 1
+                elif self._cal_point2 and math.hypot(sx - self._cal_point2[0], sy - self._cal_point2[1]) < _GRAB:
+                    self._cal_dragging = 2
+                else:
+                    if self._cal_point1 is None:
+                        self._cal_point1 = (sx, sy)
+                        self._cal_p1_items = self._draw_cal_point(sx, sy, first=True)
+                    elif self._cal_point2 is None:
+                        self._cal_point2 = (sx, sy)
+                        self._cal_p2_items = self._draw_cal_point(sx, sy, first=False)
+                        self._update_cal_line()
+                        self.calibration_ready.emit()
+                return True
+
+            elif event.type() == QEvent.Type.MouseMove and self._cal_dragging is not None:
+                sp = self._view.mapToScene(int(event.position().x()), int(event.position().y()))
+                sx, sy = sp.x(), sp.y()
+                which = self._cal_dragging
+                self._remove_cal_point_items(which)
+                if which == 1:
+                    self._cal_point1 = (sx, sy)
+                    self._cal_p1_items = self._draw_cal_point(sx, sy, first=True)
+                else:
+                    self._cal_point2 = (sx, sy)
+                    self._cal_p2_items = self._draw_cal_point(sx, sy, first=False)
+                self._update_cal_line()
+                return True
+
+            elif event.type() == QEvent.Type.MouseButtonRelease and self._cal_dragging is not None:
+                self._cal_dragging = None
+                return True
+
+        if event.type() == QEvent.Type.Wheel:
+            delta = event.angleDelta().y()
+            factor = 1.15 if delta > 0 else 1 / 1.15
+            self._user_zoomed = True
+            self._view.scale(factor, factor)
+            return True
 
         return super().eventFilter(source, event)
 
@@ -462,6 +538,52 @@ class ImageViewer(QWidget):
         txt.setPos(float(match_x), float(match_y) - 18)
         txt.setZValue(4)
         self._overlay_items.append(txt)
+
+    def _draw_cal_point(self, x: float, y: float, first: bool = True) -> list:
+        """Nakreslí kalibračný bod ako kríž (+) s číslicou. Vracia list grafických items."""
+        color = QColor(0, 255, 0) if first else QColor(0, 200, 255)
+        pen = QPen(color, 2)
+        arm = 8
+        items = []
+        for x0, y0, x1, y1 in [(x - arm, y, x + arm, y), (x, y - arm, x, y + arm)]:
+            ln = self._scene.addLine(x0, y0, x1, y1, pen)
+            ln.setZValue(5)
+            items.append(ln)
+        txt = self._scene.addSimpleText("1" if first else "2")
+        txt.setBrush(QBrush(color))
+        txt.setPos(x + arm + 2, y - 8)
+        txt.setZValue(5)
+        items.append(txt)
+        return items
+
+    def _remove_cal_point_items(self, which: int) -> None:
+        """Odstráni grafické items kalibračného bodu 1 alebo 2 zo scény."""
+        items = self._cal_p1_items if which == 1 else self._cal_p2_items
+        for item in items:
+            self._scene.removeItem(item)
+        if which == 1:
+            self._cal_p1_items = []
+        else:
+            self._cal_p2_items = []
+
+    def _update_cal_line(self) -> None:
+        """Prekreslí prerušovanú čiaru medzi kalibračnými bodmi."""
+        if self._cal_line_item:
+            self._scene.removeItem(self._cal_line_item)
+            self._cal_line_item = None
+        if self._cal_point1 and self._cal_point2:
+            x1, y1 = self._cal_point1
+            x2, y2 = self._cal_point2
+            pen = QPen(QColor(0, 255, 0), 1, Qt.PenStyle.DashLine)
+            self._cal_line_item = self._scene.addLine(x1, y1, x2, y2, pen)
+            self._cal_line_item.setZValue(5)
+
+    def confirm_calibration(self) -> None:
+        """Potvrdí kalibráciu a emituje signal s aktuálnymi pozíciami bodov."""
+        if self._cal_point1 is not None and self._cal_point2 is not None:
+            x1, y1 = self._cal_point1
+            x2, y2 = self._cal_point2
+            self.calibration_points_selected.emit(x1, y1, x2, y2)
 
     def _remove_roi_item(self) -> None:
         if self._roi_item is not None:

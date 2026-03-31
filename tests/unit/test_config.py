@@ -183,6 +183,71 @@ def test_legacy_save_load_still_works(cm):
     assert loaded["scale_mm_per_px"] == 0.05
 
 
+# ── Profile.id field ─────────────────────────────────────────────────────────
+
+def test_profile_id_default_zero():
+    p = Profile(name="x")
+    assert p.id == 0
+
+def test_profile_id_serialised():
+    p = Profile(name="x", id=42)
+    d = p.to_dict()
+    assert d["id"] == 42
+
+def test_profile_id_round_trip():
+    p = Profile(name="x", id=7, scale_mm_per_px=0.1)
+    restored = Profile.from_dict(p.to_dict())
+    assert restored.id == 7
+
+def test_profile_id_from_dict_missing_key():
+    """Old profiles without 'id' key → default 0."""
+    p = Profile.from_dict({"name": "x"})
+    assert p.id == 0
+
+
+# ── ConfigManager ID management ───────────────────────────────────────────────
+
+def test_next_id_empty_dir(cm):
+    assert cm._next_id() == 1
+
+def test_next_id_with_profiles(cm):
+    cm.save_profile(Profile(name="a"))  # gets id=1
+    cm.save_profile(Profile(name="b"))  # gets id=2
+    assert cm._next_id() == 3
+
+def test_save_profile_auto_assigns_id(cm):
+    p = Profile(name="myprofile")
+    assert p.id == 0
+    cm.save_profile(p)
+    assert p.id == 1
+
+def test_save_profile_preserves_existing_id(cm):
+    p = Profile(name="myprofile", id=99)
+    cm.save_profile(p)
+    assert p.id == 99
+    loaded = cm.load_profile("myprofile")
+    assert loaded.id == 99
+
+def test_list_profiles_full_empty(cm):
+    assert cm.list_profiles_full() == []
+
+def test_list_profiles_full_sorted_by_id(cm):
+    cm.save_profile(Profile(name="gamma"))   # id=1
+    cm.save_profile(Profile(name="alpha"))   # id=2
+    cm.save_profile(Profile(name="beta"))    # id=3
+    result = cm.list_profiles_full()
+    assert [r["name"] for r in result] == ["gamma", "alpha", "beta"]
+    assert [r["id"] for r in result] == [1, 2, 3]
+
+def test_list_profiles_full_structure(cm):
+    cm.save_profile(Profile(name="test"))
+    result = cm.list_profiles_full()
+    assert len(result) == 1
+    assert "id" in result[0]
+    assert "name" in result[0]
+    assert result[0]["name"] == "test"
+
+
 # ── Aligner algorithm parameter ───────────────────────────────────────────────
 
 def test_align_poc_returns_result():

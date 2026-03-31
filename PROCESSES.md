@@ -11,26 +11,20 @@
 |---|---|---|---|
 | 1 | Core Engine | ✅ Hotová | phase-2 |
 | 2 | Konfigurácia | ✅ Hotová | phase-2 |
-| 3 | Batch | ✅ Hotová | phase-2 |
-| 4 | GUI | ✅ Hotová | phase-2 |
-| 5 | Testy & kalibrácia (POC) | ✅ Hotová | phase-2 |
-| 6 | Vylepšenia (web research) | ✅ Hotová | phase-2 |
+| 3 | GUI | ✅ Hotová | phase-2 |
+| 4 | Testy & kalibrácia (POC) | ✅ Hotová | phase-2 |
+| 5 | Vylepšenia (web research) | ✅ Hotová | phase-2 |
+| 6 | GUI redesign — záložky + startup | ✅ Hotová | phase-2 |
 
-**Testov:** 128 (112 unit + 16 integration) — všetky zelené.
+**Testov:** 102 unit + 5 integration = 107 — všetky zelené.
 
 ---
 
 ## Spustenie
 
 ```bash
-# GUI (hlavný spôsob)
-python main.py --gui
-
-# CLI — batch bez profilu
-python main.py --reference data/reference/ref.png --folder data/batch/ --csv results/out.csv
-
-# CLI — batch s profilom
-python main.py --profile job_01 --folder data/batch/ --json results/out.json --verbose
+# GUI (jediný spôsob spustenia)
+python main.py
 ```
 
 ---
@@ -66,22 +60,21 @@ C:\Users\tomas.palko\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12
 ```
 src/
 ├── core/
-│   ├── preprocessor.py     # CLAHE + blur → uint8 grayscale
-│   ├── aligner.py          # ECC (cv2.findTransformECC), routes to POC
-│   ├── poc_correlator.py   # Phase-Only Correlation + log-polar rotation
-│   ├── roi.py              # ROI dataclass + create_mask()
-│   ├── calibration.py      # Calibration(mm_per_px)
-│   └── result.py           # AlignResult dataclass
+│   ├── preprocessor.py        # CLAHE + blur → uint8 grayscale
+│   ├── aligner.py             # ECC (cv2.findTransformECC), routes to POC
+│   ├── poc_correlator.py      # Phase-Only Correlation + log-polar rotation
+│   ├── roi.py                 # ROI dataclass + create_mask()
+│   ├── calibration.py         # Calibration(mm_per_px)
+│   └── result.py              # AlignResult dataclass
 ├── config/
-│   ├── profile.py          # Profile dataclass + validate()
-│   └── config_manager.py   # save/load/list/delete JSON profilov
-├── batch/
-│   └── batch_processor.py  # process_batch(), process_batch_profile(), BatchResult, BatchStats
+│   ├── profile.py             # Profile dataclass + id + validate()
+│   └── config_manager.py      # save/load/list/delete + auto-increment ID
 └── gui/
-    ├── image_viewer.py     # QGraphicsView + ROI rubber-band + overlay (hrany, šípka)
-    ├── reference_editor.py # Záložka Konfigurácia (ref obraz, ROI, kalibrácia, profil, test)
-    ├── batch_panel.py      # Záložka Batch (QThread worker, tabuľka live-update, štatistiky)
-    └── main_window.py      # QMainWindow, QTabWidget, menu, status bar
+    ├── image_viewer.py        # QGraphicsView + ROI/CALIBRATION modes + overlay
+    ├── startup_dialog.py      # Startup — výber/vytvorenie profilu
+    ├── profile_editor_tab.py  # Tab 1: konfigurácia profilu (1 viewer + slider params)
+    ├── inspection_tab.py      # Tab 2: inšpekcia (2 viewery + výsledky)
+    └── main_window.py         # QMainWindow + QTabWidget + startup dialog
 ```
 
 ---
@@ -89,30 +82,43 @@ src/
 ## GUI — architektúra
 
 ```
+Startup (StartupDialog)
+  → new / edit / inspect
+
 MainWindow (QMainWindow)
 ├── QTabWidget
-│   ├── Tab 0: ReferenceEditor   ← ConfigManager inject
-│   └── Tab 1: BatchPanel        ← ConfigManager inject
+│   ├── Tab 1: ProfileEditorTab     ← 1 viewer, slider params, kalibrácia, uloženie
+│   └── Tab 2: InspectionTab        ← ref viewer + insp viewer, výsledky
 └── QStatusBar
 
-ReferenceEditor
-├── ImageViewer (QGraphicsView)  ← rubber-band ROI, overlay
+ProfileEditorTab
+├── ImageViewer (referenčný)        ← ROI, CALIBRATION, segment select/remove
 └── QScrollArea
-    ├── Group: Referenčný obraz  (načítaj, cesta)
-    ├── Group: ROI               (kresliť/zmazať, x0/y0/x1/y1 spinboxy)
-    ├── Group: Kalibrácia        (mm/px)
-    ├── Group: Algoritmus        (ECC/POC, max_iter, epsilon)
-    ├── Group: Profil            (uložiť/načítať/zmazať)
-    └── Group: Test zarovnania   (načítaj test, spustiť, výsledky + overlay)
+    ├── Group: Referenčný obraz     (načítaj/zmazať)
+    ├── Group: ROI                  (kresliť/zmazať, spinboxy, toggle hrany)
+    ├── Group: Detekcia hrán        (metóda, sliders+spinboxy, min dĺžka segmentu)
+    ├── Group: Segmenty             (odstrániť klik/oblasť, undo, reset, vybrať)
+    ├── Group: Kalibrácia           (2-bodová, mm/px)
+    └── Group: Algoritmus & Profil  (ECC/POC params, ID label, názov, uložiť)
 
-BatchPanel
-├── QGroupBox: Nastavenia        (priečinok, profil, export CSV/JSON, [Spustiť], progress)
-├── QGroupBox: Výsledky          (QTableWidget: Súbor|Stav|dx_px|dy_px|dx_mm|dy_mm|Uhol|Conf)
-└── QGroupBox: Štatistiky        (count OK/total, mean±std min/max pre každú metriku)
+InspectionTab
+├── Profile combo + load btn
+├── ImageViewer (referenčný — read-only, segmenty z profilu)
+├── ImageViewer (inšpekčný — ROI, overlay výsledku)
+└── QScrollArea
+    ├── Group: Inšpekčný obraz      (načítaj/zmazať)
+    ├── Group: Inšpekčné ROI        (kresliť/zmazať, spinboxy, uložiť do profilu)
+    ├── Group: Parametre zarovnania (ECC/POC, max_iter slider, epsilon, uložiť)
+    ├── Toggle: Zobraziť hrany v ROI
+    ├── Button: Spustiť vyhľadávanie
+    └── Group: Výsledky             (dx/dy px+mm, uhol, confidence, NCC, čas, ťažisko)
 ```
 
-**Batch worker:** `_BatchWorker(QThread)` — emituje `row_ready(int, dict)` per-image signal,
-`finished(BatchResult)` na konci. UI zostáva responzívne.
+### Profile (src/config/profile.py)
+- Pole `id: int = 0` — auto-increment pri prvom uložení (0 = nepridelené)
+- Uložené ako JSON v `config/profiles/<name>.json`
+- `ConfigManager._next_id()` nájde max ID zo súborov → max+1
+- `list_profiles_full()` vracia `[{id, name}, ...]` zoradené podľa ID
 
 ---
 
@@ -144,7 +150,7 @@ MIN_CONFIDENCE     = 0.60   # minimálna ECC spoľahlivosť
 
 ---
 
-### Fáza 6 — Vylepšenia (na základe web research 2024–2025)
+### Fáza 5 — Vylepšenia (na základe web research 2024–2025)
 
 Empiricky testované na syntetických dátach; výsledky:
 
