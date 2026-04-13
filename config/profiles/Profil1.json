@@ -1,0 +1,51 @@
+{
+  "id": 1,
+  "name": "Profil1",
+  "reference_path": "C:/Users/tomas.palko/Desktop/TestPictures/15.jpg",
+  "roi": {
+    "x0": 685,
+    "y0": 53,
+    "x1": 1364,
+    "y1": 356
+  },
+  "scale_mm_per_px": 1.0,
+  "algorithm": "ECC",
+  "ecc": {
+    "max_iter": 2000,
+    "epsilon": 1e-08,
+    "gauss_filt_size": 7
+  },
+  "auto_clahe": true,
+  "edge_method": "Canny",
+  "canny": {
+    "threshold1": 148,
+    "threshold2": 27,
+    "blur": 3
+  },
+  "scharr": {
+    "threshold": 30,
+    "blur": 3
+  },
+  "log": {
+    "sigma": 1.5,
+    "threshold": 10,
+    "blur": 1
+  },
+  "pc": {
+    "nscale": 4,
+    "min_wavelength": 6,
+    "mult": 2.1,
+    "k": 2.0
+  },
+  "dexined": {
+    "weights": "",
+    "threshold": 0.5,
+    "device": "cpu"
+  },
+  "insp_roi": null,
+  "min_seg_len": 0,
+  "selected_segment_centroid": [
+    1021.9507959479016,
+    169.86685962373372
+  ]
+}
